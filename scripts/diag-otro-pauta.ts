@@ -15,7 +15,7 @@ async function main() {
     )
     if (!stub) throw new Error("Pautas schema not found")
 
-    const records = await getAllCustomObjectRecords(stub.key)
+    const { records } = await getAllCustomObjectRecords(stub.key)
     console.log(`Total pauta records: ${records.length}`)
 
     const noContactRel = records.filter(

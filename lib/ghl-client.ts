@@ -13,6 +13,7 @@ import {
   note429,
   RATE_LIMIT_INTERVAL_MS,
 } from "./ghl-limiter";
+import { fanOutPages, cursorWalk, type PagedResult } from "./paged-fetch";
 
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 // GHL's current API contract. Verified (read-only probe) to return shapes
@@ -396,6 +397,11 @@ export interface GHLOpportunitiesResponse {
     currentPage: number;
     nextPage?: number | null;
     prevPage?: number | null;
+    // Cursor for the next page. GHL serves these on every response and REQUIRES
+    // them past 10,000 records (offset paging 400s beyond page 100).
+    startAfter?: number;
+    startAfterId?: string;
+    nextPageUrl?: string;
   };
 }
 
@@ -435,7 +441,14 @@ export async function getOpportunities(params?: {
   assignedTo?: string;
   limit?: number;
   page?: number;
+  // Cursor pagination. GHL REQUIRES these past 10,000 records — offset paging
+  // beyond page 100 returns 400 SEARCH_USE_START_AFTER_PAGINATION. When a cursor
+  // is supplied, `page` is omitted entirely: the two schemes are alternatives,
+  // not combinable.
+  startAfter?: number;
+  startAfterId?: string;
 }): Promise<GHLOpportunitiesResponse> {
+  const usingCursor = params?.startAfterId !== undefined || params?.startAfter !== undefined;
   // Opportunities search endpoint uses location_id (snake_case)
   return ghlFetch<GHLOpportunitiesResponse>("/opportunities/search", {
     useSnakeCaseLocationId: true,
@@ -445,7 +458,9 @@ export async function getOpportunities(params?: {
       status: params?.status,
       assigned_to: params?.assignedTo,
       limit: params?.limit ?? 100,
-      page: params?.page ?? 1,
+      page: usingCursor ? undefined : params?.page ?? 1,
+      startAfter: params?.startAfter,
+      startAfterId: params?.startAfterId,
     },
   });
 }
@@ -848,12 +863,12 @@ export async function getCustomObjectSchema(objectKey: string): Promise<{ object
 export async function getAllCustomObjectRecords(
   objectKey: string,
   onProgress?: (count: number) => void
-): Promise<GHLCustomObjectRecord[]> {
+): Promise<PagedResult<GHLCustomObjectRecord>> {
   const pageLimit = 100;
   // locationId is required here, but in the request body — not the query string.
   // noQueryLocationId keeps it out of the query; ghlFetch still injects it into
   // the POST body (noBodyLocationId is left unset).
-  const fetchPage = (page: number) =>
+  const fetchRecordsPage = (page: number) =>
     ghlFetch<GHLCustomObjectRecordsResponse>(`/objects/${objectKey}/records/search`, {
       method: "POST",
       version: "2023-02-21",
@@ -861,126 +876,106 @@ export async function getAllCustomObjectRecords(
       body: { page, pageLimit },
     });
 
-  const first = await fetchPage(1);
+  const first = await fetchRecordsPage(1);
   const total = first.total ?? first.records.length;
 
-  const seen = new Set<string>();
-  const all: GHLCustomObjectRecord[] = [];
-  const absorb = (records: GHLCustomObjectRecord[]) => {
-    for (const r of records) {
-      if (seen.has(r.id)) continue;
-      seen.add(r.id);
-      all.push(r);
-    }
-    onProgress?.(all.length);
-  };
-  absorb(first.records);
+  const done = first.records.length >= total || first.records.length < pageLimit;
+  const totalPages = done ? 1 : Math.ceil(total / pageLimit);
 
-  if (all.length >= total || first.records.length < pageLimit) return all;
-
-  // Total known after page 1 → fetch the remaining pages concurrently; ghlFetch's
-  // limiter bounds in-flight count and rate, so no manual paging/sleep is needed.
-  const totalPages = Math.ceil(total / pageLimit);
-  const rest = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2).then((r) => r.records))
-  );
-  for (const records of rest) absorb(records);
-
-  return all;
+  // Same all-or-nothing hazard the opportunities fan-out had: one rejected page
+  // used to discard every page that landed. fanOutPages keeps them and retries
+  // only what failed.
+  return fanOutPages<GHLCustomObjectRecord>({
+    initial: first.records,
+    pages: Array.from({ length: totalPages - 1 }, (_, i) => i + 2),
+    fetchPage: (page) => fetchRecordsPage(page).then((r) => r.records),
+    pageSize: pageLimit,
+    idOf: (r) => r.id,
+    total,
+    onProgress,
+    onRetry: (pages) =>
+      console.warn(`[GHL] retrying ${pages.length} ${objectKey} page(s): ${pages.join(", ")}`),
+  });
 }
 
 // ============ HELPER FUNCTIONS ============
 
-// Helper to fetch all pages of opportunities.
-// The /opportunities/search endpoint is page-numbered AND returns meta.total on
-// the first page, so once we have page 1 we know exactly how many pages remain
-// and can fetch them all concurrently. The global semaphore + token bucket in
-// ghlFetch bound the actual in-flight count and request rate, so there's no need
-// for the old sequential page-walk or the inter-page sleep — those just added
-// latency on top of the central limiter. Results are deduped by id so a shifting
-// dataset (page boundaries moving between requests) can't inflate the count.
+// Helper to fetch all opportunities, by CURSOR.
+//
+// This used to fan every offset page out in parallel, which was ~4x faster and
+// silently wrong on any sub-account past 10,000 opportunities: GHL answers
+// /opportunities/search pages 1-100 and then returns, deterministically and
+// forever,
+//   400 {"code":"SEARCH_USE_START_AFTER_PAGINATION",
+//        "message":"Please use startAfter and startAfterId for pagination."}
+// Measured on a 11,793-opportunity location: offset paging topped out at exactly
+// 10,000 rows; the cursor walk returns all 11,793. No amount of retrying could
+// ever have fixed it — the error is a hard ceiling, not a transient failure.
+//
+// The cost is that cursor pagination must stay sequential (each hop's cursor
+// comes from the previous response), so this is slower than the old fan-out. It
+// is, however, correct, and it has no ceiling.
 export async function getAllOpportunities(
   onProgress?: (count: number) => void
-): Promise<GHLOpportunity[]> {
+): Promise<PagedResult<GHLOpportunity>> {
   const pageSize = 100;
-  const first = await getOpportunities({ page: 1, limit: pageSize });
-  const total = first.meta.total ?? first.opportunities.length;
+  type Cursor = { startAfter?: number; startAfterId?: string };
 
-  const seen = new Set<string>();
-  const all: GHLOpportunity[] = [];
-  const absorb = (opps: GHLOpportunity[]) => {
-    for (const o of opps) {
-      if (seen.has(o.id)) continue;
-      seen.add(o.id);
-      all.push(o);
-    }
-    onProgress?.(all.length);
-  };
-  absorb(first.opportunities);
-
-  if (all.length >= total || !first.meta.nextPage) return all;
-
-  // Fan out the remaining pages. ghlFetch's limiter keeps this safe.
-  const totalPages = Math.ceil(total / pageSize);
-  const rest = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) =>
-      getOpportunities({ page: i + 2, limit: pageSize }).then((r) => r.opportunities)
-    )
-  );
-  for (const opps of rest) absorb(opps);
-
-  return all;
+  return cursorWalk<GHLOpportunity, Cursor>({
+    pageSize,
+    label: "Opportunities",
+    idOf: (o) => o.id,
+    onProgress,
+    fetchPage: async (cursor) => {
+      const res = await getOpportunities({ limit: pageSize, ...cursor });
+      const last = res.opportunities[res.opportunities.length - 1];
+      // Prefer the cursor GHL hands back; fall back to the last row's own
+      // (createdAt, id), which is the same pair meta encodes.
+      const lastMs = last ? new Date(last.createdAt).getTime() : NaN;
+      const next: Cursor | undefined = last
+        ? {
+            startAfter:
+              res.meta.startAfter ?? (Number.isNaN(lastMs) ? undefined : lastMs),
+            startAfterId: res.meta.startAfterId ?? last.id,
+          }
+        : undefined;
+      return { records: res.opportunities, total: res.meta.total, next };
+    },
+  });
 }
 
-// Helper to fetch all contacts with cursor pagination
+// Helper to fetch all contacts with cursor pagination.
+// Shares cursorWalk with getAllOpportunities so the repo's only two cursor
+// walks can't drift apart. No inter-page sleep: the walk must stay sequential,
+// but ghlFetch's token bucket already paces the request rate.
 export async function getAllContacts(
   onProgress?: (count: number) => void
-): Promise<GHLContact[]> {
-  const allContacts: GHLContact[] = [];
-  const seenIds = new Set<string>();
-  let startAfterId: string | undefined;
-  let startAfter: number | undefined;
-  let total: number | undefined;
+): Promise<PagedResult<GHLContact>> {
+  const pageSize = 100;
+  type Cursor = { startAfter?: number; startAfterId?: string };
 
-  while (true) {
-    const response = await getContacts({ limit: 100, startAfterId, startAfter });
-    if (total === undefined && response.meta?.total !== undefined) total = response.meta.total;
-
-    // Dedupe by id — GHL's cursor pagination occasionally returns overlapping
-    // pages and we'd otherwise inflate the count.
-    let pageNew = 0;
-    for (const c of response.contacts) {
-      if (seenIds.has(c.id)) continue;
-      seenIds.add(c.id);
-      allContacts.push(c);
-      pageNew++;
-    }
-    onProgress?.(allContacts.length);
-
-    // Stop once we have all records or got a partial page.
-    if (
-      (total !== undefined && allContacts.length >= total) ||
-      response.contacts.length < 100
-    ) break;
-
-    // If a whole page is duplicates, the cursor is stuck — bail out.
-    if (pageNew === 0) break;
-
-    // Advance cursor — use both fields together (startAfter is a dateAdded
-    // epoch ms; without it the cursor isn't unique).
-    const last = response.contacts[response.contacts.length - 1];
-    startAfterId = response.meta?.startAfterId ?? last.id;
-    // Guard against a missing/malformed dateAdded producing a NaN cursor (which
-    // would serialize to the literal "NaN" on the query string). The dedupe +
-    // pageNew===0 bailout above still protect us if the cursor isn't unique.
-    const lastDateMs = new Date(last.dateAdded).getTime();
-    startAfter = response.meta?.startAfter ?? (Number.isNaN(lastDateMs) ? undefined : lastDateMs);
-    // No inter-page sleep: cursor pagination must stay sequential, but ghlFetch's
-    // token bucket already paces the request rate. An extra sleep here is pure
-    // added latency.
-  }
-
-  return allContacts;
+  return cursorWalk<GHLContact, Cursor>({
+    pageSize,
+    label: "Contacts",
+    idOf: (c) => c.id,
+    onProgress,
+    fetchPage: async (cursor) => {
+      const res = await getContacts({ limit: pageSize, ...cursor });
+      const last = res.contacts[res.contacts.length - 1];
+      // Advance on both fields together — startAfter is a dateAdded epoch ms,
+      // and without it the cursor isn't unique. Guard against a malformed
+      // dateAdded producing NaN, which would serialize as the literal "NaN".
+      const lastMs = last ? new Date(last.dateAdded).getTime() : NaN;
+      const next: Cursor | undefined = last
+        ? {
+            startAfter:
+              res.meta?.startAfter ?? (Number.isNaN(lastMs) ? undefined : lastMs),
+            startAfterId: res.meta?.startAfterId ?? last.id,
+          }
+        : undefined;
+      return { records: res.contacts, total: res.meta?.total, next };
+    },
+  });
 }
 
 // ============ FACEBOOK ADS / AD MANAGER (ad-publishing) ============

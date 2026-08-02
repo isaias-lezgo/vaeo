@@ -54,35 +54,68 @@ todo lo acumulado. Mismo defecto, distinta forma.
   indistinguible de "efectivamente hay 0". Ese es el eslabón exacto por el que un fallo
   total llegó a renderizarse como un dataset vacío legítimo.
 
-### Por qué muere una página (no confirmado — requiere logs)
+### Por qué muere una página — CONFIRMADO
 
-El error solo queda en `console.error` del servidor, así que la causa concreta se
-confirma leyendo los logs de `pnpm dev` / Vercel filtrando por `[GHL]`. Candidatos, en
-orden de sospecha:
+Medido contra la sub-cuenta real de VAEO (`scripts/diag-paged-sync.ts`, 2026-08-02).
+**GHL corta la paginación por offset en 10,000 registros.** Las páginas 1-100 responden
+normal; de la 101 en adelante (offset ≥ 10,000) siempre devuelven el mismo 400:
 
-1. **Timeout de 30s en páginas profundas.** `GHL_REQUEST_TIMEOUT_MS = 30_000`.
-   `/opportunities/search` pagina por **offset numerado**; la página 140 obliga a GHL a
-   recorrer 14,000 registros para devolver 100.
+```
+400 Bad Request
+{"code":"SEARCH_USE_START_AFTER_PAGINATION",
+ "message":"Please use startAfter and startAfterId for pagination."}
+```
 
-   **Evidencia fuerte a favor.** El fallo solo aparece en sub-cuentas de 10k+ registros,
-   y la sub-cuenta de VAEO trae el experimento controlado: contactos y oportunidades
-   tienen ambos ~14k, y solo las oportunidades mueren. La diferencia entre las dos no es
-   el tamaño sino el tipo de paginación — `getAllContacts` usa **cursor**
-   (`startAfterId` + `startAfter`), que no se degrada con la profundidad: la página 141
-   le cuesta a GHL lo mismo que la 2. Las pautas, con offset igual pero solo ~31 páginas,
-   también sobrevivieron. Cuentas chicas → pocas páginas → offsets someros → nunca se
-   acercan a los 30s.
-2. **Presupuesto de rate-limit agotado.** El sync completo son ~300+ peticiones contra
-   ~100 req/10s. `noteRateLimitHeaders` mete cooldown cada vez que
-   `x-ratelimit-remaining <= 2`. Con otro consumidor del mismo token (MCP de GHL, Make,
-   automatizaciones de la sub-cuenta) los 429 se apilan.
-3. **`401 Command timed out`** del gateway de GHL agotando sus reintentos.
-4. **Un status que no se reintenta** — 400/403/422 lanzan al primer intento
-   (`lib/ghl-client.ts:164`), matando las 140 al instante.
+Resultado de la medición, ya con la paginación tolerante puesta:
 
-**Este diseño no depende de cuál sea.** Con paginación tolerante, cualquiera de los
-cuatro cuesta una página de 100 registros, no las 14,000. Ajustar el timeout o el ritmo
-del limiter queda fuera de alcance hasta tener el log que identifique la causa.
+```
+opportunities: 10000 de 11793 | missingPages=[101…118] | 26.5s
+contacts:      14085 de 14085 | missingPages=[]        | 77.2s
+```
+
+Tres consecuencias que reorientan el diseño:
+
+1. **Es determinista, no transitorio.** Ningún reintento lo va a resolver nunca — la
+   pasada de reintento de `fanOutPages` falló idéntica. Y como es un 400,
+   `ghlFetch` no lo reintenta siquiera (`lib/ghl-client.ts:164`), así que mataba el
+   `Promise.all` al primer intento.
+2. **Explica exactamente el patrón "solo en cuentas de 10k+"** que reportó el cliente. El
+   número no era "muchos registros lo vuelven lento": era literalmente el tope. Por
+   debajo de 10,000 oportunidades nunca se llega a la página 101.
+3. **La resiliencia sola no basta.** Convierte un fallo catastrófico (0 registros) en uno
+   parcial permanente (10,000 de 11,793, perdiendo las mismas 1,793 en cada sync). Mejor,
+   pero no suficiente.
+
+Se descartaron por medición, no por razonamiento: timeout de 30s, agotamiento del
+rate-limit, y `401 Command timed out`. Ninguno interviene.
+
+### La corrección de fondo: cursor en oportunidades
+
+El propio mensaje de error dice qué usar, y el `meta` de la página 1 ya sirve el cursor:
+
+```json
+{ "total": 11793, "startAfterId": "Azz5YxtnPoKdg5ZVfeX9", "startAfter": 1785479202688 }
+```
+
+Verificado punta a punta contra la sub-cuenta real (`scripts/probe-opp-cursor.ts`): el
+recorrido por cursor **pasa el tope sin inmutarse** (hop 100 = página-offset 101, la
+primera que devuelve 400) y termina en **11,793 de 11,793**. Completo.
+
+`getAllOpportunities` migra a `startAfter`/`startAfterId`, el mismo esquema que
+`getAllContacts` ya usaba — y que es justo la razón por la que los contactos, con ~14k
+registros, nunca fallaron. El costo es que el cursor es inherentemente secuencial: 102s
+frente a los 26s del abanico paralelo. En el sync completo eso pesa menos de lo que
+parece, porque los contactos ya tardan 77s en paralelo: el sync pasa de ~77s a ~102s.
+
+Se descartó un híbrido (offset en paralelo para los primeros 10,000, cursor para el
+resto) que mantendría el sync en ~77s: obliga a mantener dos rutas de paginación y deja
+una costura en el registro 10,000 donde un dataset en movimiento puede producir
+duplicados o huecos. No vale ese riesgo por 25 segundos.
+
+**`fanOutPages` sigue en uso** para `getAllCustomObjectRecords` (pautas), que hoy va por
+offset con ~31 páginas. Si las pautas de alguna sub-cuenta llegaran a 10,000, ese
+endpoint podría tener el mismo tope; no se puede comprobar sin una cuenta de ese tamaño,
+así que queda anotado como riesgo conocido y la resiliencia lo cubre mientras tanto.
 
 ## Diseño
 
@@ -110,23 +143,30 @@ export interface PagedResult<T> {
 }
 ```
 
-**`getAllOpportunities` y `getAllCustomObjectRecords`:**
+**`getAllCustomObjectRecords` (pautas) — abanico tolerante, `fanOutPages`:**
 
 1. Página 1 igual que hoy. Si falla, se propaga (no hay nada que salvar).
 2. El resto pasa de `Promise.all` a `Promise.allSettled`. Se absorben las cumplidas y se
    guardan los números de página de las rechazadas.
-3. **Reintento por página, una vez.** Si hubo rechazos, se espera
-   `RATE_LIMIT_INTERVAL_MS` (10s, el ancho de la ventana de GHL — deja que el cooldown
-   expire y el bucket se rellene) y se reintentan **solo esas páginas**, otra vez con
-   `allSettled`. Esto es el "reintentar automáticamente" aplicado al nivel más barato:
-   1 página de 140, no las 140.
-4. Devuelven `PagedResult`. Las que sigan fallando quedan en `missingPages`.
+3. **Reintento por página, una vez.** Si hubo rechazos, se espera una ventana de
+   rate-limit (10s — deja que el cooldown expire y el bucket se rellene) y se reintentan
+   **solo esas páginas**, otra vez con `allSettled`. Es el "reintentar automáticamente"
+   aplicado al nivel más barato: 1 página de 31, no las 31.
+4. Devuelve `PagedResult`. Las que sigan fallando quedan en `missingPages`.
 
-**`getAllContacts`:** el `while` se envuelve en try/catch. Al fallar una página, se rompe
-el bucle, se conserva todo lo acumulado y se marca como parcial usando `total` (que ya se
-captura de `meta.total`) para estimar lo perdido. No se reintenta el cursor: al no saber
-la posición exacta de lo que falta, un reintento traería duplicados o un tramo arbitrario;
-más honesto es reportarlo incompleto.
+**`getAllOpportunities` — recorrido por cursor, `cursorWalk`:** ya no usa `fanOutPages`.
+El abanico por offset es irreparable contra el tope de 10,000 (ver arriba), así que pasa
+a `startAfter`/`startAfterId`. Comparte implementación con `getAllContacts` a través de
+`cursorWalk` en el mismo módulo, para que las dos únicas paginaciones por cursor del
+repo no puedan derivar. `missingPages` guarda el número de salto donde se rompió el
+recorrido, si se rompió.
+
+**`getAllContacts`:** también pasa por `cursorWalk`, que ya trae el try/catch. Al fallar
+un salto se rompe el recorrido, se conserva todo lo acumulado y se marca como parcial
+usando `total` (de `meta.total`) para estimar lo perdido. **El cursor no se reintenta**:
+al no saber la posición exacta de lo que falta, un reintento traería duplicados o un
+tramo arbitrario; más honesto es reportarlo incompleto. Ésa es la diferencia de fondo con
+`fanOutPages`, donde cada página es direccionable y sí se puede repetir sola.
 
 `searchLocationTasks` no cambia: pagina secuencialmente con `CAP = 500` por rama y ya
 degrada bien.
@@ -238,14 +278,9 @@ No hay framework de tests en el repo y no se adopta uno. Siguiendo su convenció
 
 ## Fuera de alcance
 
-- Cambiar el ritmo del limiter — sin log que señale al candidato 2, sería adivinar.
-- Migrar `/opportunities/search` a paginación por cursor para eliminar los offsets
-  profundos de raíz. Es la solución de fondo si el candidato 1 se confirma, y la
-  evidencia ya apunta ahí, pero es un cambio mayor y depende de que GHL soporte cursor en
-  ese endpoint — hay que verificarlo contra el esquema antes de planearlo.
-
-**Condicionado al log, no fuera de alcance:** subir el timeout por petición para las
-páginas profundas de `/opportunities/search`. Es una mitigación de una línea y la
-hipótesis 1 la respalda, pero se implementa solo si el log confirma que los fallos son
-`AbortError`/timeout y no 429. Queda especificada en la última tarea del plan.
+- Cambiar el ritmo del limiter o el timeout por petición. Ambos se descartaron por
+  medición: la causa es un 400 determinista, no latencia ni presupuesto.
+- Migrar `getAllCustomObjectRecords` (pautas) a cursor. Va por offset con ~31 páginas y
+  no se acerca al tope; migrarlo ahora sería especular sobre un límite que no podemos
+  medir sin una sub-cuenta con 10,000+ pautas.
 - Cachear o persistir el resultado del sync entre recargas.

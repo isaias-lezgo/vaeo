@@ -8,7 +8,7 @@
 //
 // Wrapped in main() rather than using top-level await: this package is CJS.
 import assert from "node:assert/strict";
-import { fanOutPages } from "../lib/paged-fetch";
+import { fanOutPages, cursorWalk } from "../lib/paged-fetch";
 
 type Row = { id: string };
 
@@ -178,6 +178,108 @@ async function main() {
     });
     assert.equal(seen[0], 100, "first callback is the seeded page");
     assert.equal(seen[seen.length - 1], 300, "last callback is the full count");
+  }
+
+  // ---------------------------------------------------------------- cursorWalk
+  //
+  // Cursor pagination is what GHL demands past 10,000 records
+  // (400 SEARCH_USE_START_AFTER_PAGINATION). It cannot fan out and cannot retry
+  // a hop, so the property that matters is: a failed hop keeps what it already
+  // collected instead of throwing the walk away.
+
+  // Build a cursor-paginated source over `total` rows, optionally breaking at a
+  // given hop number.
+  function makeCursorSource(opts: { total: number; pageSize: number; failAtHop?: number }) {
+    let hop = 0;
+    const fetchPage = async (cursor: number | undefined) => {
+      hop++;
+      if (opts.failAtHop === hop) throw new Error(`hop ${hop} exploded`);
+      const start = cursor ?? 0;
+      const records = Array.from(
+        { length: Math.max(0, Math.min(opts.pageSize, opts.total - start)) },
+        (_, i) => ({ id: `r${start + i}` })
+      );
+      const nextStart = start + records.length;
+      return {
+        records,
+        total: opts.total,
+        next: nextStart < opts.total ? nextStart : undefined,
+      };
+    };
+    return { fetchPage };
+  }
+
+  // --- walks the whole set, past any offset ceiling
+  {
+    const { fetchPage } = makeCursorSource({ total: 11793, pageSize: 100 });
+    const res = await cursorWalk<Row, number>({
+      fetchPage,
+      idOf,
+      pageSize: 100,
+      label: "Test",
+    });
+    assert.equal(res.records.length, 11793, "cursor walk collected every row");
+    assert.deepEqual(res.missingPages, [], "complete walk reports nothing missing");
+    assert.equal(res.missingEstimate, 0);
+  }
+
+  // --- THE PROPERTY: a hop that throws keeps everything collected so far.
+  // Before this, the exception propagated and the caller got nothing.
+  {
+    const { fetchPage } = makeCursorSource({ total: 11793, pageSize: 100, failAtHop: 40 });
+    const res = await cursorWalk<Row, number>({
+      fetchPage,
+      idOf,
+      pageSize: 100,
+      label: "Test",
+    });
+    assert.equal(res.records.length, 3900, "kept the 39 hops that landed");
+    assert.deepEqual(res.missingPages, [40], "reports the hop it broke on");
+    assert.equal(res.missingEstimate, 11793 - 3900, "estimate is the untraversed tail");
+  }
+
+  // --- failing on the very first hop yields an empty-but-flagged result, which
+  // is what lets the route tell "broken" apart from "legitimately zero".
+  {
+    const { fetchPage } = makeCursorSource({ total: 500, pageSize: 100, failAtHop: 1 });
+    const res = await cursorWalk<Row, number>({
+      fetchPage,
+      idOf,
+      pageSize: 100,
+      label: "Test",
+    });
+    assert.equal(res.records.length, 0);
+    assert.deepEqual(res.missingPages, [1], "flagged, not silently empty");
+  }
+
+  // --- a legitimately empty source is NOT flagged
+  {
+    const { fetchPage } = makeCursorSource({ total: 0, pageSize: 100 });
+    const res = await cursorWalk<Row, number>({
+      fetchPage,
+      idOf,
+      pageSize: 100,
+      label: "Test",
+    });
+    assert.equal(res.records.length, 0);
+    assert.deepEqual(res.missingPages, [], "empty is not the same as broken");
+  }
+
+  // --- a stuck cursor (same page forever) terminates instead of looping
+  {
+    const stuck = Array.from({ length: 100 }, (_, i) => ({ id: `s${i}` }));
+    let calls = 0;
+    const res = await cursorWalk<Row, number>({
+      fetchPage: async () => {
+        calls++;
+        return { records: stuck, total: 5000, next: 1 };
+      },
+      idOf,
+      pageSize: 100,
+      label: "Test",
+    });
+    assert.equal(res.records.length, 100, "absorbed the one distinct page");
+    assert.equal(calls, 2, "bailed out on the first all-duplicate page");
   }
 
   console.log("verify-paged-fetch: all assertions passed");

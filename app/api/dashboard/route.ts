@@ -230,7 +230,7 @@ async function fetchAllPautas(onProgress?: (count: number) => void): Promise<Pau
       return [];
     }
 
-    const records = await getAllCustomObjectRecords(stub.key, onProgress);
+    const { records } = await getAllCustomObjectRecords(stub.key, onProgress);
 
     // The property holding the campaign name isn't consistent across sub-accounts —
     // each one named its custom-object field differently. Observed so far:
@@ -461,7 +461,7 @@ export async function GET() {
                 send({ type: "progress", message: `Cargando contactos… ${count.toLocaleString("es-MX")}` });
                 sendStep("contacts", "loading", count);
               })
-                .then((r) => { sendStep("contacts", "done", r.length); return r; })
+                .then((r) => { sendStep("contacts", "done", r.records.length); return r.records; })
                 .catch((err: unknown) => {
                   console.error("[GHL] Contacts fetch failed:", err);
                   sendStep("contacts", "done", 0);
@@ -471,7 +471,7 @@ export async function GET() {
                 send({ type: "progress", message: `Cargando oportunidades… ${count.toLocaleString("es-MX")}` });
                 sendStep("opportunities", "loading", count);
               })
-                .then((r) => { sendStep("opportunities", "done", r.length); return r; })
+                .then((r) => { sendStep("opportunities", "done", r.records.length); return r.records; })
                 .catch((err: unknown) => {
                   console.error("[GHL] Opportunities fetch failed:", err);
                   sendStep("opportunities", "done", 0);
