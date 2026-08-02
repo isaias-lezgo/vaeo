@@ -134,10 +134,11 @@ export function resolveCampaignName(
 // helpers detect that shared prefix so the Marketing chart can group by it and
 // dim it, making the pattern legible to a human who then infers the agency.
 //
-// This is the deliberate INVERSE of campaignPrefixCut() in
-// marketing-dashboard.tsx, which strips the prefix shared by ALL keys so bars
-// don't render visually identical. Different question, opposite treatment —
-// do not try to unify them.
+// This is the deliberate INVERSE of campaignPrefixCut(), which stripped the
+// prefix shared by ALL keys so bars didn't render visually identical. That
+// helper lived in the since-deleted marketing-dashboard.tsx (recoverable from
+// git history / `upstream`); if a rebuilt chart needs it again, keep the two
+// treatments separate — different question, opposite answer.
 
 /** Bucket for named campaigns whose name matched no family. */
 export const SIN_PATRON_FAMILY = "Sin patrón"

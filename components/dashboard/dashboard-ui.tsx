@@ -229,6 +229,52 @@ export function ChartHint({ children }: { children: ReactNode }) {
   )
 }
 
+/**
+ * Placeholder for a business-line panel whose charts have not been built yet.
+ *
+ * It deliberately reports live record counts rather than rendering a bare "no
+ * hay nada aquí": the GHL sync, the date filter and the prop plumbing are all
+ * still wired, so showing what is in scope proves the data path works while the
+ * charts are being designed. Delete this call once the panel has real content.
+ */
+export function PanelPlaceholder({
+  brand,
+  tagline,
+  counts,
+}: {
+  brand: string
+  tagline: string
+  counts: Array<{ label: string; value: number }>
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 rounded-lg border border-dashed border-border bg-muted/20 px-6 py-16 text-center">
+      <div className="space-y-1.5">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground">{brand}</h2>
+        <p className="text-sm text-muted-foreground">{tagline}</p>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {counts.map(({ label, value }) => (
+          <span
+            key={label}
+            className="inline-flex items-baseline gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            <span className="font-semibold tabular-nums text-foreground">
+              {value.toLocaleString("es-MX")}
+            </span>
+            {label}
+          </span>
+        ))}
+      </div>
+
+      <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
+        Panel sin gráficas todavía. Los datos ya llegan filtrados por el rango de fechas
+        seleccionado — solo falta decidir qué medir.
+      </p>
+    </div>
+  )
+}
+
 export function SectionHeader({ title }: { title: string }) {
   return (
     <div className="flex items-center gap-3">

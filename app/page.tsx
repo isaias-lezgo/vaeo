@@ -4,19 +4,19 @@ import { useState, useEffect, useMemo } from "react"
 import Image from "next/image"
 import { useTheme } from "next-themes"
 import { AnimatePresence } from "framer-motion"
-import { MarketingDashboard } from "@/components/dashboard/marketing-dashboard"
+import { VaeoDashboard } from "@/components/dashboard/vaeo-dashboard"
 import { DateRangeFilter } from "@/components/dashboard/date-range-filter"
 import { filterByDateRange, resolveDateRange, type DateFilter } from "@/lib/date-range"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
-import { SalesDashboard } from "@/components/dashboard/sales-dashboard"
+import { MeshDashboard } from "@/components/dashboard/mesh-dashboard"
 import { ConversationsChat } from "@/components/dashboard/conversations-chat"
 import { LoadingScreen } from "@/components/dashboard/loading-screen"
 import { useDashboardData } from "@/hooks/use-dashboard-data"
 import { useConversationsData } from "@/hooks/use-conversations-data"
 import {
-  TrendingUp,
-  BarChart3,
+  Building2,
+  Network,
   RefreshCw,
   Loader2,
   AlertCircle,
@@ -32,20 +32,21 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
-type DashboardTab = "marketing" | "sales" | "conversations"
+// The two business lines of Grupo VAEO, one panel each, plus the AI assistant.
+type DashboardTab = "vaeo" | "mesh" | "conversations"
 
 // Browser-tab title per view. The app is a single route, so the title is set
 // imperatively — `metadata` in layout.tsx can only give one static fallback.
 const TAB_TITLES: Record<DashboardTab, string> = {
-  marketing: "Marketing - Lezgo Suite CRM",
-  sales: "Ventas - Lezgo Suite CRM",
+  vaeo: "VAEO - Lezgo Suite CRM",
+  mesh: "MESH - Lezgo Suite CRM",
   conversations: "Asistente IA - Lezgo Suite CRM",
 }
 
 export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
-  const [activeTab, setActiveTab] = useState<DashboardTab>("marketing")
+  const [activeTab, setActiveTab] = useState<DashboardTab>("vaeo")
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -124,7 +125,7 @@ export default function DashboardPage() {
             />
             <div className="min-w-0">
               <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight">Lezgo Suite Analíticas</h1>
-              <p className="text-[11px] font-medium tracking-wide text-white/55">Marketing y Ventas</p>
+              <p className="text-[11px] font-medium tracking-wide text-white/55">VAEO y MESH</p>
             </div>
             {locationName && (
               <>
@@ -237,8 +238,8 @@ export default function DashboardPage() {
         <div className="flex gap-6 sm:gap-8">
           {(
             [
-              { id: "marketing" as const, label: "Marketing", icon: TrendingUp },
-              { id: "sales" as const, label: "Ventas", icon: BarChart3 },
+              { id: "vaeo" as const, label: "VAEO", icon: Building2 },
+              { id: "mesh" as const, label: "MESH", icon: Network },
               { id: "conversations" as const, label: "Asistente IA", icon: Sparkles },
             ] as const
           ).map(({ id, label, icon: Icon }) => {
@@ -270,8 +271,12 @@ export default function DashboardPage() {
 
       {/* Dashboard Content */}
       <div className="flex-1 pt-2 pb-6">
-        {activeTab === "marketing" && (
-          <MarketingDashboard
+        {/* Both business-line panels get the identical prop surface: the
+            date-filtered slices for charts, plus the unfiltered `all*` sets as
+            lookup tables for drill-down joins. Keep them in sync as charts are
+            built out, so a chart can move between panels unchanged. */}
+        {activeTab === "vaeo" && (
+          <VaeoDashboard
             opportunities={opportunities}
             allOpportunities={data?.opportunities ?? []}
             contacts={contacts}
@@ -281,27 +286,31 @@ export default function DashboardPage() {
             pipelines={data?.pipelines ?? []}
             tasks={tasks}
             calls={calls}
+            messages={filteredMessages}
+            allMessages={messages}
             appointments={appointments}
             allAppointments={data?.appointments ?? []}
+            members={availableMembers}
             locationId={data?.locationId ?? ""}
             locationName={locationName ?? undefined}
             periodLabel={periodLabel}
           />
         )}
-        {activeTab === "sales" && (
-          <SalesDashboard
+        {activeTab === "mesh" && (
+          <MeshDashboard
             opportunities={opportunities}
             allOpportunities={data?.opportunities ?? []}
             contacts={contacts}
             allContacts={data?.contacts ?? []}
+            pautas={pautas}
+            allPautas={data?.pautas ?? []}
+            pipelines={data?.pipelines ?? []}
+            tasks={tasks}
             calls={calls}
             messages={filteredMessages}
             allMessages={messages}
             appointments={appointments}
             allAppointments={data?.appointments ?? []}
-            pipelines={data?.pipelines ?? []}
-            tasks={tasks}
-            pautas={pautas}
             members={availableMembers}
             locationId={data?.locationId ?? ""}
             locationName={locationName ?? undefined}
@@ -309,7 +318,7 @@ export default function DashboardPage() {
           />
         )}
         {/* Kept permanently mounted (hidden when inactive) so the AI chat
-            history survives switching to the Marketing/Ventas tabs. */}
+            history survives switching to the VAEO/MESH tabs. */}
         {/* The AI assistant always sees the full (unfiltered) dataset — the
             date filter bar is hidden on this tab. */}
         <div className={cn(activeTab !== "conversations" && "hidden")}>

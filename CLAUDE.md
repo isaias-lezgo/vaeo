@@ -2,6 +2,45 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## The client: Grupo VAEO
+
+This repo is a **single-client fork** of a shared multi-client GHL panel
+(`upstream` → `dashboards-GHL`), built to serve **one customer: Grupo VAEO**. Custom
+panels are being built for their **two business lines**, which is what the two dashboard
+tabs are — not "Marketing" and "Ventas" as in the shared panel.
+
+**VAEO Business Club** (`vaeo.mx`) — flexible-workspace operator in Mexico, founded/led by
+Jorge Pizzuto Aznar, ~22 employees, HQ Querétaro. Its pitch is *"Workspitality"* —
+hospitality applied to workspace — and *"Tu espacio de trabajo, como te gusta"*. Four
+product lines:
+
+| Line | What it is |
+|---|---|
+| Oficinas virtuales | Fiscal address, package reception, personalized phone answering, IP telephony (3CX), concierge |
+| Coworking | Shared flexible desks, community/networking events |
+| Oficinas equipadas | Private furnished offices — *"más que oficinas, lugares llenos de experiencias"* |
+| Salas de juntas | Meeting rooms, in-person and remote |
+
+Locations: **Monterrey (×2), Querétaro, San Luis Potosí**. Memberships are customizable,
+and meeting-room hours transfer between branches — so a lead's *location* matters as much
+as their product interest.
+
+**MESH** (`meshcoworking.com`) — the group's **coworking brand**, launched in Monterrey ~5
+minutes from San Pedro Garza García, near Hospital San José. Offers private offices,
+coworking floor, and meeting rooms. Positioned at entrepreneurs and companies wanting
+*"flexibilidad, comodidad y un ambiente inspirador para crecer"*.
+
+**Audience for both panels**: entrepreneurs/freelancers, PYMEs, and corporate clients.
+Sales are **membership/lease subscriptions**, not one-off purchases — so retention,
+occupancy and lead-to-tour-to-contract flow matter more than the single-purchase funnel
+the shared panel was designed around. Keep that in mind when proposing charts.
+
+**Multi-tenancy is no longer a design concern here.** The roster code (`lib/clients.ts`,
+password-as-identity, per-location limiter keying) still exists and still works — leave it
+alone unless asked — but do **not** weigh new work against cross-client generality, and
+don't preserve per-account portability when it complicates a chart. Hardcoding VAEO's
+actual pipeline names, stages and custom fields is fine and preferred here.
+
 ## Commands
 
 ```bash
@@ -23,11 +62,14 @@ pnpm verify:attachments  # lib/attachments.ts + lib/attachment-tools.ts — tabu
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
-**No test framework, and not adopting one.** Instead, the three pure modules where a
-silent bug would be a *cross-tenant data leak* have assertion scripts under
-`scripts/verify-*.ts` (plain `node:assert/strict`, run via `tsx`). Run them after
-touching auth, the roster, or the limiter. Everything else is verified by driving the
-real app.
+**No test framework, and not adopting one.** Instead, the pure modules where a silent
+bug would be a *cross-tenant data leak* (clients / auth / limiter) or a silently wrong
+answer (attachments) have assertion scripts under `scripts/verify-*.ts` (plain
+`node:assert/strict`, run via `tsx`). Run them after touching auth, the roster, the
+limiter, or the attachment parsers. Everything else is verified by driving the real app.
+
+There is no way to run a single assertion within a script — each `verify:*` script is
+the unit. Run the one that covers the module you touched.
 
 Gotcha when writing these scripts: this package is CommonJS (no `"type": "module"`),
 so `tsx` compiles to CJS where **top-level `await` fails**. Wrap async work in a
@@ -43,12 +85,16 @@ in `package.json`), and the Vercel deploy runs `pnpm install --frozen-lockfile` 
 A tracked `package-lock.json` lingers from before the switch; it is **not** the source
 of truth — ignore it.
 
+`pnpm-workspace.yaml` exists only for its `allowBuilds` list (`sharp`, `esbuild`). pnpm 11
+blocks postinstall scripts by default; without those entries the install dies with
+`ERR_PNPM_IGNORED_BUILDS`. If a new dependency needs a postinstall, add it there.
+
 ## Environment Variables
 
 Required vars in `.env.local`:
 - `DASHBOARD_CLIENTS` — JSON array of clients, one per GHL sub-account:
   `[{"id","name","locationId","ghlToken","password"?}]`. `password` is optional and
-  defaults to that client's `locationId`. Use `npm run add-client` to extend it safely.
+  defaults to that client's `locationId`. Use `pnpm add-client` to extend it safely.
 - `DASHBOARD_AUTH_SECRET` — random string used to HMAC-sign the session cookie (`openssl rand -hex 32`)
 - `ANTHROPIC_API_KEY` — used by `app/api/chat` (assistant), `analyze-report` (PDF analyses)
   and `analyze-contact`
@@ -59,13 +105,28 @@ All are server-side only. `DASHBOARD_CLIENTS` is read in `lib/clients.ts`;
 `DASHBOARD_AUTH_SECRET` in `lib/auth.ts`, `app/api/auth/login/route.ts`, and
 `middleware.ts` — never exposed to the browser.
 
+## Repo docs
+
+- `docs/superpowers/specs/YYYY-MM-DD-<feature>-design.md` — the design doc for a feature;
+  `docs/superpowers/plans/` — its implementation plan. Both are written **before** the
+  code. When picking up non-trivial work on an existing feature, check for its spec first —
+  it usually records why an approach was rejected.
+- **`README.md` is stale — do not trust it.** It still describes Next 15, SWR caching, a
+  `lib/mock-data.ts` fallback, a `filter-bar.tsx` with member/pipeline/tag filters, and a
+  `conversations-dashboard.tsx` tab. None of those exist. This file (CLAUDE.md) is the
+  accurate description; treat the README as marketing copy.
+- `DESIGN.md` — the design system (named color tokens, typography, component rules).
+  `PRODUCT.md` — who the three audiences are and what each asks of the same data.
+  `snap.md` / `snap2.md` are one-off Playwright accessibility-tree dumps, not docs.
+
 ## Architecture
 
-This is a single-page Next.js 16 (App Router) dashboard that surfaces GoHighLevel CRM data in three tabs: **Marketing**, **Ventas**, and **Asistente IA**. It is **multi-tenant**: one deployment serves every client, and a client's password resolves to their own GHL sub-account (see "Multi-client" below).
+This is a single-page Next.js 16 (App Router) dashboard that surfaces GoHighLevel CRM data in three tabs: **VAEO**, **MESH**, and **Asistente IA**. The multi-tenant machinery from the shared panel is still in place (a client's password resolves to their own GHL sub-account — see "Multi-client" below), but this deployment serves Grupo VAEO only.
 
 ### Current state
 
-- `components/dashboard/marketing-dashboard.tsx` and `components/dashboard/sales-dashboard.tsx` — **fully built**: each receives already-filtered data as props and renders its own set of charts, KPI cards, and drill-down drawers.
+- `components/dashboard/vaeo-dashboard.tsx` and `components/dashboard/mesh-dashboard.tsx` — **deliberately empty**. The old Marketing/Ventas charts were deleted wholesale so the two business-line panels can be rebuilt from scratch; each currently renders only `PanelPlaceholder`. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged.
+- Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
 - The third tab (`DashboardTab` id `"conversations"`, labelled **"Asistente IA"**) renders `conversations-chat.tsx`. It is **permanently mounted and merely hidden** when inactive, so the chat history survives tab switches — do not make it conditional. It always sees the full, unfiltered dataset.
 - Both dashboards can **export a branded PDF report** of their own charts (see "PDF report export").
 
@@ -105,6 +166,7 @@ already holds and need only the middleware gate:
 | `analyze-contact` | Anthropic call summarizing one contact (does read GHL for the opportunity) |
 | `chat` | one Anthropic turn for the AI assistant — **no GHL** |
 | `analyze-report` | Anthropic pass writing the PDF report's analyses — **no GHL** |
+| `attachments/process` | parses an uploaded PDF/CSV/Excel for the assistant — **no GHL** |
 | `auth/login` / `auth/logout` | session cookie |
 
 Client-side data hooks mirror this: `use-dashboard-data.ts` (main sync),
@@ -158,8 +220,8 @@ context.
 `app/api/chat` and `app/api/analyze-report` never touch GHL (they work off data the
 browser already holds), so they need no client context — only the middleware gate.
 
-Verification scripts (no test framework in this repo): `npm run verify:clients`,
-`verify:auth`, `verify:limiter`.
+Verification scripts (no test framework in this repo): `pnpm verify:clients`,
+`pnpm verify:auth`, `pnpm verify:limiter`.
 
 ### Loading & progress
 
@@ -177,7 +239,7 @@ The assistant is an **agent loop that runs in the browser**, not on the server.
   model returns `tool_use` blocks the server just returns them; `hooks/use-agent-loop.ts`
   executes the tools locally and POSTs back with `tool_result` blocks. The server holds
   **no session state** between turns.
-- `lib/ai-tools.ts` — the ~22 `TOOL_DEFINITIONS` and their executor. Most tools
+- `lib/ai-tools.ts` — the ~25 `TOOL_DEFINITIONS` and their executor. Most tools
   (`search_*`, `aggregate`, `relate`, `get_*`) run **against the dataset the browser
   already holds** — no extra GHL calls. The exceptions reach back through
   `lib/ghl-fetchers.ts` for data not in the initial sync: `get_contact_messages`,
@@ -185,6 +247,11 @@ The assistant is an **agent loop that runs in the browser**, not on the server.
 - UI-side tools: `render_chart` → `chat-chart.tsx`, `ask_user` → `chat-question.tsx`,
   `show_in_panel` → the conversations context panel, `create_pdf` / `export_csv` →
   direct browser downloads.
+- `lib/conversations-panel.ts` holds the context panel's logic (extracted from the
+  component so it stays testable-by-inspection): the **urgency buckets** are derived from
+  the last message only — inbound and unanswered for >72 h = `red`, 24–72 h = `yellow`,
+  under 24 h = `grey`; anything the team already replied to is `grey`. Contacts sort by
+  bucket, then oldest-activity-first inside a bucket.
 - `lib/ai-context.ts` — the Spanish system prompt. It carries hard-won behavioral rules
   (date-window consistency, never concluding from a truncated message sample, `lostReason`
   being a native field, never printing IDs). **Treat those numbered rules as regression
@@ -195,8 +262,60 @@ The assistant is an **agent loop that runs in the browser**, not on the server.
   array reference so it survives within a single agent run.
 - `datasetSummary` is built once on the client and pinned for **prompt caching**; keep
   it stable across turns in a session or the cache key breaks.
+- **Timezone**: the browser's IANA zone is posted as `userTimezone` on every `chat` and
+  `analyze-contact` call; both routes fall back to `America/Mexico_City`. Dates rendered
+  into a prompt must go through that zone — the server runs in UTC on Vercel, so
+  formatting a timestamp without it shifts "yesterday" by a day for the client.
 
-### Pauta (paid-advertising) classification
+#### File attachments
+
+Users can drop PDF / CSV / Excel files into the assistant composer.
+
+- `app/api/attachments/process/route.ts` parses uploads server-side (`unpdf` for PDF,
+  `xlsx` for tabular) into `ProcessedAttachment` objects. It touches no GHL. Limits:
+  32 MB PDF, 25 MB tabular; each Excel sheet becomes its own table.
+- **PDF text-vs-visual fallback**: if extracted text is under `MIN_PDF_TEXT` (40
+  non-whitespace chars) the PDF is assumed scanned and re-sent as a native base64
+  document block for Claude to read visually, instead of as text.
+- **Tabular files are never pasted into the prompt.** Only a summary (schema, row count,
+  8 sample rows, per-column stats from `buildTableSummary`) goes to the model; the full
+  rows stay in the browser in `uploadedTablesRef` (`hooks/use-agent-loop.ts`) and are
+  queried through the `list_uploaded_files` / `query_uploaded_table` /
+  `join_uploaded_table` tools, executed locally by `lib/attachment-tools.ts`. Keep it that
+  way — a spreadsheet inlined into the prompt blows the context and the cache.
+- `lib/attachments.ts` stays framework-free (shared by the route and the verify script);
+  the client-only file reading lives in the composer.
+
+### Shared domain rules (single sources of truth)
+
+Four small `lib/` modules exist so Marketing, Ventas, and the AI tools all agree on the
+same definitions. **Never re-inline any of this logic in a component** — a local copy
+that drifts makes two tabs report different numbers for the same question, which is the
+bug class these modules were extracted to kill.
+
+| Module | Owns |
+|---|---|
+| `lib/pauta.ts` | what counts as "de pauta" + campaign-name resolution (below) |
+| `lib/opportunity-status.ts` | `isWonOpp()` — canonical "won" detection |
+| `lib/source-platform.ts` | "Origen de lead" platform bucketing + `PLATFORM_COLORS` / `PLATFORM_ORDER` |
+| `lib/csv.ts` | CSV cell escaping (`csvCell`, `buildCsv`) |
+
+- **`isWonOpp()`**: some sub-accounts never flip `status` to `"won"` — they record a sale
+  by moving the opportunity into a late stage ("09. Negocio Ganado") while `status`
+  stays `"open"`. Detection matches the **stage name** (`/ganad[oa]|\bwon\b/i`), never
+  hardcoded stage IDs, so it stays portable across locations. An explicitly
+  `lost`/`abandoned` opp is never a win regardless of stage.
+- **`source-platform.ts`**: buckets into Instagram / Facebook / TikTok / Google / Otro by
+  loose substring match, because field *names* differ per sub-account ("Origen de Lead"
+  vs "Origen del Lead", "Tipo de pauta" vs "Tipo de anuncio"). **WhatsApp is deliberately
+  absent** — it's a contact channel, not a lead origin, so a bare "whatsapp" stays in
+  "Otro". `components/dashboard/origen-de-lead-criteria.tsx` is the UI that explains these
+  rules to the user; keep the two in sync.
+- **`csv.ts`**: shared by the assistant's `export_csv` tool and the drill drawer's
+  "Exportar" button (`lib/drill-export.ts`), so both files escape identically.
+  `lib/download.ts` triggers the actual browser download for both.
+
+#### Pauta (paid-advertising) classification
 
 `lib/pauta.ts` is the **single source of truth** for what counts as "de pauta", shared by
 the marketing charts and the AI tools. Do not re-inline this logic anywhere.
