@@ -11,6 +11,7 @@
     "verify:auth": "tsx scripts/verify-auth.ts",
     "verify:limiter": "tsx scripts/verify-limiter.ts",
     "verify:attachments": "tsx scripts/verify-attachments.ts",
+    "verify:paged": "tsx scripts/verify-paged-fetch.ts",
     "add-client": "tsx scripts/add-client.ts"
   },
   "dependencies": {
