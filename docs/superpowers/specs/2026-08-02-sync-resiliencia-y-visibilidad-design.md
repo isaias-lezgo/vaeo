@@ -61,8 +61,17 @@ confirma leyendo los logs de `pnpm dev` / Vercel filtrando por `[GHL]`. Candidat
 orden de sospecha:
 
 1. **Timeout de 30s en páginas profundas.** `GHL_REQUEST_TIMEOUT_MS = 30_000`.
-   `/opportunities/search` pagina por número de página; la página 140 obliga a GHL a
-   recorrer 14,000 registros. Encaja con que solo fallara el dataset de más páginas.
+   `/opportunities/search` pagina por **offset numerado**; la página 140 obliga a GHL a
+   recorrer 14,000 registros para devolver 100.
+
+   **Evidencia fuerte a favor.** El fallo solo aparece en sub-cuentas de 10k+ registros,
+   y la sub-cuenta de VAEO trae el experimento controlado: contactos y oportunidades
+   tienen ambos ~14k, y solo las oportunidades mueren. La diferencia entre las dos no es
+   el tamaño sino el tipo de paginación — `getAllContacts` usa **cursor**
+   (`startAfterId` + `startAfter`), que no se degrada con la profundidad: la página 141
+   le cuesta a GHL lo mismo que la 2. Las pautas, con offset igual pero solo ~31 páginas,
+   también sobrevivieron. Cuentas chicas → pocas páginas → offsets someros → nunca se
+   acercan a los 30s.
 2. **Presupuesto de rate-limit agotado.** El sync completo son ~300+ peticiones contra
    ~100 req/10s. `noteRateLimitHeaders` mete cooldown cada vez que
    `x-ratelimit-remaining <= 2`. Con otro consumidor del mismo token (MCP de GHL, Make,
@@ -77,7 +86,15 @@ del limiter queda fuera de alcance hasta tener el log que identifique la causa.
 
 ## Diseño
 
-### Capa 1 — Paginación tolerante a fallos (`lib/ghl-client.ts`)
+### Capa 1 — Paginación tolerante a fallos (`lib/paged-fetch.ts` + `lib/ghl-client.ts`)
+
+La lógica de abanico + reintento se extrae a un módulo nuevo, `lib/paged-fetch.ts`, con
+`fetchPage` inyectado como parámetro. Se extrae en vez de escribirse inline en
+`ghl-client.ts` por una razón concreta: así queda libre de red y de framework, y puede
+tener su propio `scripts/verify-paged-fetch.ts` con `node:assert/strict`, como
+`lib/attachments.ts` y `lib/ghl-limiter.ts`. Este es exactamente el tipo de bug que el
+repo reserva para esos scripts — uno que no truena, solo devuelve una respuesta
+silenciosamente equivocada.
 
 Se introduce un tipo de resultado compartido para los tres recorridos paginados:
 
@@ -146,10 +163,14 @@ resultado marcado como error.
 el frame `data`, así que **no hace falta ningún endpoint nuevo**. Si el reintento
 tampoco trae nada, el paso queda en `error`.
 
-**Heartbeat.** Un `setInterval` de 5s dentro del `withClient` emite
-`{ type: "heartbeat", elapsedMs }` mientras el sync sigue vivo. Es lo que le da al cliente
-señal de vida durante los cooldowns, en los que hoy no sale absolutamente nada. Se limpia
-en el `finally` junto al `controller.close()`.
+**Sin heartbeat.** Se consideró un frame `{ type: "heartbeat", elapsedMs }` cada 5s para
+dar señal de vida durante los cooldowns. Se descartó: un `setInterval` de 1s en el hook
+del cliente produce el mismo tiempo transcurrido y la misma detección de atasco, sin
+frame nuevo, sin manejar un intervalo dentro del `ReadableStream`, y sin el riesgo de que
+siga disparando `controller.enqueue` después de que el navegador aborte. Lo único que el
+heartbeat distinguía —"servidor vivo esperando a GHL" vs "servidor colgado"— no cambia el
+mensaje al usuario, y una conexión realmente muerta ya la cubre el rechazo de
+`fetchStream` → `isError`.
 
 **Warnings en el payload.** El frame `data` lleva:
 
@@ -164,14 +185,12 @@ warnings: Array<{
 
 ### Capa 3 — La UI reporta con honestidad
 
-**`hooks/fetch-stream.ts`** — `StreamStep.status` se amplía al nuevo union; se maneja el
-frame `heartbeat` con un callback `onHeartbeat` opcional.
+**`hooks/fetch-stream.ts`** — `StreamStep.status` se amplía al nuevo union.
 
-**`hooks/use-dashboard-data.ts`** — `StepState.status` se amplía igual. Se expone
-`elapsedMs` (del heartbeat) y `stalled: boolean`, calculado en el cliente: `true` cuando
-han pasado >15s desde el último frame `step`. El heartbeat sigue llegando durante un
-cooldown, así que `stalled` distingue "el servidor está vivo pero atorado esperando a
-GHL" de "la conexión se cayó" — sin heartbeat *y* sin steps es lo segundo.
+**`hooks/use-dashboard-data.ts`** — `StepState.status` se amplía igual. Un
+`setInterval` de 1s, activo solo mientras `isLoading`, alimenta dos valores nuevos:
+`elapsedMs` (desde que arrancó el sync) y `stalled: boolean` (`true` cuando han pasado
+>15s desde el último frame `step`).
 
 **`components/dashboard/loading-screen.tsx`**
 
@@ -203,25 +222,30 @@ cada sync que vuelva a producir warnings.
 
 ## Verificación
 
-No hay framework de tests en el repo. Este cambio toca `lib/ghl-client.ts`, que no tiene
-script `verify-*`, así que:
+No hay framework de tests en el repo y no se adopta uno. Siguiendo su convención:
 
-- `npx tsc --noEmit` — obligatorio. `next build` ignora errores de TS, y este cambio
-  modifica tipos de retorno usados en varios sitios, que es justo donde un error de tipos
-  se escaparía sin ser visto.
-- `pnpm verify:limiter` — se toca el timing alrededor del limiter (la pausa del reintento
-  usa `RATE_LIMIT_INTERVAL_MS`).
+- **`scripts/verify-paged-fetch.ts`** (nuevo, `pnpm verify:paged`) — cubre el bug que
+  originó todo esto: con `fetchPage` falso, que una página que falla permanentemente
+  **conserve** las demás; que una que falla y luego funciona se recupere en el reintento;
+  que el dedupe aguante páginas solapadas; y que `missingEstimate` quede acotado por
+  `total`.
+- `npx tsc --noEmit` — obligatorio. `next build` ignora errores de TS y este cambio
+  modifica tipos de retorno usados en varios sitios, que es justo donde un error se
+  escaparía sin ser visto.
 - Manejo real de la app contra la sub-cuenta de VAEO, que es donde el fallo se reproduce:
   confirmar que las oportunidades ahora llegan (o llegan parciales con banner), y leer el
   log `[GHL]` para identificar por fin cuál de los cuatro candidatos es la causa.
-- Simulación de fallo forzando un rechazo en una página concreta del abanico, para
-  comprobar que se reintenta, que sale `partial` y que aparece el banner con los números.
 
 ## Fuera de alcance
 
-- Ajustar `GHL_REQUEST_TIMEOUT_MS` o el ritmo del limiter — sin el log que identifique la
-  causa, sería adivinar.
-- Cambiar `/opportunities/search` a paginación por cursor para evitar los offsets
-  profundos. Es la solución de fondo si el candidato 1 se confirma, pero es un cambio
-  mayor y depende de que GHL lo soporte en ese endpoint.
+- Cambiar el ritmo del limiter — sin log que señale al candidato 2, sería adivinar.
+- Migrar `/opportunities/search` a paginación por cursor para eliminar los offsets
+  profundos de raíz. Es la solución de fondo si el candidato 1 se confirma, y la
+  evidencia ya apunta ahí, pero es un cambio mayor y depende de que GHL soporte cursor en
+  ese endpoint — hay que verificarlo contra el esquema antes de planearlo.
+
+**Condicionado al log, no fuera de alcance:** subir el timeout por petición para las
+páginas profundas de `/opportunities/search`. Es una mitigación de una línea y la
+hipótesis 1 la respalda, pero se implementa solo si el log confirma que los fallos son
+`AbortError`/timeout y no 429. Queda especificada en la última tarea del plan.
 - Cachear o persistir el resultado del sync entre recargas.
