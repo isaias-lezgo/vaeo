@@ -12,6 +12,7 @@ import { es } from "date-fns/locale"
 import { MeshDashboard } from "@/components/dashboard/mesh-dashboard"
 import { ConversationsChat } from "@/components/dashboard/conversations-chat"
 import { LoadingScreen } from "@/components/dashboard/loading-screen"
+import { SyncWarningBanner } from "@/components/dashboard/sync-warning-banner"
 import { useDashboardData } from "@/hooks/use-dashboard-data"
 import { useConversationsData } from "@/hooks/use-conversations-data"
 import {
@@ -243,6 +244,14 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
+
+      {data?.warnings && data.warnings.length > 0 && (
+        <SyncWarningBanner
+          warnings={data.warnings}
+          onRetry={() => refresh()}
+          isLoading={isLoading}
+        />
+      )}
 
       <nav className="border-b border-border bg-card px-4 sm:px-6" aria-label="Vistas del panel">
         <div className="flex gap-6 sm:gap-8">
