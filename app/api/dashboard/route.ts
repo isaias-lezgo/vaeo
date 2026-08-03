@@ -18,6 +18,7 @@ import {
 } from "@/lib/ghl-client";
 import { requireClient, unauthorized } from "@/lib/session";
 import { withClient } from "@/lib/ghl-context";
+import type { PagedResult } from "@/lib/paged-fetch";
 import type {
   Contact,
   Opportunity,
@@ -26,6 +27,7 @@ import type {
   Pipeline,
   Pauta,
   Appointment,
+  SyncWarning,
 } from "@/lib/types";
 
 type Attribution = {
@@ -208,6 +210,78 @@ function enc(obj: unknown): string {
   return JSON.stringify(obj) + "\n";
 }
 
+type StepStatus = "loading" | "retrying" | "done" | "partial" | "error";
+
+interface DatasetOutcome<T> {
+  key: string;
+  records: T[];
+  status: "done" | "partial" | "error";
+  loaded: number;
+  expected?: number;
+}
+
+// One GHL rate-limit window — the same pause fanOutPages uses between attempts.
+const DATASET_RETRY_PAUSE_MS = 10_000;
+
+// Run one dataset of the sync, emitting its step frames and applying the
+// dataset-level safety net.
+//
+// Two distinct retry levels are in play. The paginated walks already keep
+// whatever landed and (for fan-out) retry individual failed pages, which handles
+// the common case cheaply. This one only fires when the dataset came back with
+// NOTHING salvageable — the very first page failed, so there was nothing for the
+// page-level retry to work with.
+//
+// A dataset that legitimately holds zero records (missingPages empty) is NOT a
+// failure and must not trigger the retry: that's a location with no pautas, not
+// a broken fetch. Conflating those two is the bug this whole change exists to
+// kill, so the distinction is load-bearing.
+async function runDataset<T>(
+  key: string,
+  send: (obj: unknown) => void,
+  fetcher: (onProgress: (count: number) => void) => Promise<PagedResult<T>>
+): Promise<DatasetOutcome<T>> {
+  const step = (status: StepStatus, count?: number) =>
+    send({ type: "step", key, status, ...(count !== undefined ? { count } : {}) });
+
+  const attempt = async (): Promise<PagedResult<T> | null> => {
+    try {
+      return await fetcher((count) => step("loading", count));
+    } catch (err) {
+      console.error(`[GHL] ${key} fetch failed:`, err);
+      return null;
+    }
+  };
+
+  const salvagedNothing = (r: PagedResult<T> | null) =>
+    !r || (r.records.length === 0 && r.missingPages.length > 0);
+
+  let result = await attempt();
+
+  if (salvagedNothing(result)) {
+    console.warn(`[GHL] ${key} came back empty — retrying the whole dataset once`);
+    step("retrying");
+    await new Promise((r) => setTimeout(r, DATASET_RETRY_PAUSE_MS));
+    result = await attempt();
+  }
+
+  if (salvagedNothing(result)) {
+    step("error", 0);
+    return { key, records: [], status: "error", loaded: 0, expected: result?.total };
+  }
+
+  const r = result as PagedResult<T>;
+  const status = r.missingPages.length > 0 ? "partial" : "done";
+  step(status, r.records.length);
+  return { key, records: r.records, status, loaded: r.records.length, expected: r.total };
+}
+
+// Datasets that don't paginate still go through runDataset, so every step frame
+// is produced in one place. They are complete by definition.
+function asPaged<T>(records: T[]): PagedResult<T> {
+  return { records, missingPages: [], missingEstimate: 0 };
+}
+
 function resolveContactIdFromRelations(
   relations: import("@/lib/ghl-client").GHLCustomObjectRelation[] | undefined
 ): string | undefined {
@@ -216,7 +290,9 @@ function resolveContactIdFromRelations(
   return contactRelation?.recordId ?? undefined;
 }
 
-async function fetchAllPautas(onProgress?: (count: number) => void): Promise<Pauta[]> {
+async function fetchAllPautas(
+  onProgress?: (count: number) => void
+): Promise<PagedResult<Pauta>> {
   try {
     // List all custom objects to find the Pautas schema key
     const schemasResp = await getCustomObjects();
@@ -226,11 +302,14 @@ async function fetchAllPautas(onProgress?: (count: number) => void): Promise<Pau
         s.labels.plural.toLowerCase().includes("pautas")
     );
     if (!stub) {
+      // A location with no Pautas object legitimately has zero pautas — this is
+      // NOT a failure, so it must not be flagged (empty missingPages).
       console.warn("[GHL] Pautas custom object schema not found");
-      return [];
+      return { records: [], missingPages: [], missingEstimate: 0 };
     }
 
-    const { records } = await getAllCustomObjectRecords(stub.key, onProgress);
+    const paged = await getAllCustomObjectRecords(stub.key, onProgress);
+    const records = paged.records;
 
     // The property holding the campaign name isn't consistent across sub-accounts —
     // each one named its custom-object field differently. Observed so far:
@@ -250,7 +329,7 @@ async function fetchAllPautas(onProgress?: (count: number) => void): Promise<Pau
       return "";
     };
 
-    return records.map((r) => {
+    const pautas = records.map((r) => {
       const properties: Record<string, string> = {};
       for (const [k, v] of Object.entries(r.properties)) {
         if (SKIP_PROPERTY_KEYS.has(k)) continue;
@@ -268,9 +347,20 @@ async function fetchAllPautas(onProgress?: (count: number) => void): Promise<Pau
         properties,
       };
     });
+
+    // Carry the partiality signal up rather than flattening to a bare array —
+    // swallowing it here would undo the whole point of the layer below.
+    return {
+      records: pautas,
+      total: paged.total,
+      missingPages: paged.missingPages,
+      missingEstimate: paged.missingEstimate,
+    };
   } catch (err) {
+    // Flag page 1 as missing so runDataset treats this as a failure (and retries)
+    // instead of reading it as a legitimately empty location.
     console.error("[GHL] Pautas fetch failed:", err);
-    return [];
+    return { records: [], missingPages: [1], missingEstimate: 0 };
   }
 }
 
@@ -450,46 +540,63 @@ export async function GET() {
           // GHL load (the old "fetch pautas last to avoid rate-limiting" ordering
           // is now handled centrally). Progress messages from contacts/opps
           // interleave — the intended tradeoff for the latency win.
-          send({ type: "progress", message: "Cargando datos de GoHighLevel…" });
+          send({ type: "progress", message: "Cargando datos de Lezgo Suite CRM…" });
           for (const k of ["contacts", "opportunities", "pautas", "appointments", "tasks"]) {
             sendStep(k, "loading", 0);
           }
 
-          const [contactsRaw, opportunitiesRaw, pautas, appointments, tasks] =
+          const [contactsOut, opportunitiesOut, pautasOut, appointmentsOut, tasksOut] =
             await Promise.all([
-              getAllContacts((count) => {
-                send({ type: "progress", message: `Cargando contactos… ${count.toLocaleString("es-MX")}` });
-                sendStep("contacts", "loading", count);
-              })
-                .then((r) => { sendStep("contacts", "done", r.records.length); return r.records; })
-                .catch((err: unknown) => {
-                  console.error("[GHL] Contacts fetch failed:", err);
-                  sendStep("contacts", "done", 0);
-                  return [] as import("@/lib/ghl-client").GHLContact[];
-                }),
-              getAllOpportunities((count) => {
-                send({ type: "progress", message: `Cargando oportunidades… ${count.toLocaleString("es-MX")}` });
-                sendStep("opportunities", "loading", count);
-              })
-                .then((r) => { sendStep("opportunities", "done", r.records.length); return r.records; })
-                .catch((err: unknown) => {
-                  console.error("[GHL] Opportunities fetch failed:", err);
-                  sendStep("opportunities", "done", 0);
-                  return [] as import("@/lib/ghl-client").GHLOpportunity[];
-                }),
-              fetchAllPautas((count) => sendStep("pautas", "loading", count))
-                .then((r) => { sendStep("pautas", "done", r.length); return r; }),
-              fetchAppointments(userMap)
-                .then((r) => { sendStep("appointments", "done", r.length); return r; }),
-              searchLocationTasks()
-                .then((raw) => raw.map(transformTask))
-                .then((r) => { sendStep("tasks", "done", r.length); return r; })
-                .catch((err: unknown) => {
-                  console.error("[GHL] Tasks fetch failed:", err);
-                  sendStep("tasks", "done", 0);
-                  return [] as Task[];
-                }),
+              runDataset("contacts", send, (onProgress) =>
+                getAllContacts((count) => {
+                  send({
+                    type: "progress",
+                    message: `Cargando contactos… ${count.toLocaleString("es-MX")}`,
+                  });
+                  onProgress(count);
+                })
+              ),
+              runDataset("opportunities", send, (onProgress) =>
+                getAllOpportunities((count) => {
+                  send({
+                    type: "progress",
+                    message: `Cargando oportunidades… ${count.toLocaleString("es-MX")}`,
+                  });
+                  onProgress(count);
+                })
+              ),
+              runDataset("pautas", send, (onProgress) => fetchAllPautas(onProgress)),
+              // fetchAppointments swallows its own errors and returns [], so a real
+              // failure reads here as "zero appointments" and raises no warning.
+              // Pre-existing behavior, left alone deliberately.
+              runDataset("appointments", send, async () =>
+                asPaged(await fetchAppointments(userMap))
+              ),
+              runDataset("tasks", send, async () =>
+                asPaged((await searchLocationTasks()).map(transformTask))
+              ),
             ]);
+
+          const contactsRaw = contactsOut.records;
+          const opportunitiesRaw = opportunitiesOut.records;
+          const pautas = pautasOut.records;
+          const appointments = appointmentsOut.records;
+          const tasks = tasksOut.records;
+
+          const warnings: SyncWarning[] = [
+            contactsOut,
+            opportunitiesOut,
+            pautasOut,
+            appointmentsOut,
+            tasksOut,
+          ]
+            .filter((o) => o.status !== "done")
+            .map((o) => ({
+              key: o.key,
+              kind: o.status as "partial" | "error",
+              loaded: o.loaded,
+              expected: o.expected,
+            }));
 
           send({ type: "progress", message: "Procesando datos…" });
 
@@ -624,6 +731,7 @@ export async function GET() {
             sources: Array.from(sourceSet),
             pautas,
             locationId: client.locationId,
+            warnings,
             meta: {
               totalContacts: contacts.length,
               totalOpportunities: opportunities.length,

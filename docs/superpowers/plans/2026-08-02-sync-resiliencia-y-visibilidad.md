@@ -1578,125 +1578,19 @@ Luego consultar al usuario antes de mergear a `main`.
 
 ---
 
-### Task 8 (CONDICIONAL): timeout más largo para páginas profundas
+### Task 8: ELIMINADA — refutada por medición
 
-**Ejecutar esta tarea SOLO si el log capturado en la Task 7, Step 3 muestra que los
-fallos de página son timeouts** — mensajes con `request failed after retries - The
-operation was aborted` / `TimeoutError`. **Si los fallos son `429 - retries exhausted`,
-saltarse esta tarea entera**: subir el timeout no ayuda contra un rate limit y solo
-alarga el camino de fallo.
+Esta tarea proponía subir el timeout por petición para las páginas profundas de
+`/opportunities/search`, condicionada a que el log confirmara timeouts.
 
-**Por qué existe.** El fallo aparece solo en sub-cuentas de 10k+ registros. En la
-sub-cuenta de VAEO, contactos y oportunidades tienen ambos ~14k y solo las oportunidades
-mueren; la diferencia no es el tamaño sino la paginación — contactos va por cursor (coste
-plano con la profundidad), oportunidades por offset numerado (la página 140 obliga a GHL
-a recorrer 14,000 registros). Con offsets así, 30s se queda corto.
+**El log lo refutó.** La medición contra la sub-cuenta real (`scripts/diag-paged-sync.ts`)
+mostró que los fallos no son timeouts ni 429, sino un **400 determinista**:
+`SEARCH_USE_START_AFTER_PAGINATION`. GHL corta la paginación por offset en 10,000
+registros. Ningún timeout, por largo que sea, cambia eso.
 
-**Files:**
-- Modify: `lib/ghl-client.ts` (interfaz `GHLRequestOptions`, `ghlFetch` línea ~108, `getOpportunities` línea 431)
-
-**Interfaces:**
-- Consumes: nada nuevo.
-- Produces: `getOpportunities` acepta `timeoutMs?: number`.
-
-- [ ] **Step 1: Permitir un timeout por petición en `ghlFetch`**
-
-Añadir el campo a `GHLRequestOptions` (junto a `useSnakeCaseLocationId`, `noQueryLocationId`, etc.):
-
-```ts
-  /**
-   * Per-request override of GHL_REQUEST_TIMEOUT_MS. Deep offset pages on
-   * /opportunities/search make GHL walk every preceding record, so page 140 of a
-   * 14k-opportunity location can legitimately outlast the default 30s.
-   */
-  timeoutMs?: number;
-```
-
-Y usarlo en la llamada a `fetch` (línea ~108):
-
-```ts
-        response = await fetch(url.toString(), {
-          ...requestInit,
-          signal: AbortSignal.timeout(options.timeoutMs ?? GHL_REQUEST_TIMEOUT_MS),
-        });
-```
-
-- [ ] **Step 2: Escalar el timeout con la profundidad de la página en `getOpportunities`**
-
-Reemplazar el cuerpo de `getOpportunities` (línea 431):
-
-```ts
-// GHL charges for depth on this endpoint: it paginates by offset, so page N makes
-// it walk N*limit records. Page 1 answers in ~60ms; page 140 of a 14k-opportunity
-// location does not. Grow the timeout with depth instead of letting deep pages
-// die at a flat 30s — which is exactly how a large sub-account ended up
-// reporting zero opportunities.
-const OPP_BASE_TIMEOUT_MS = 30_000;
-const OPP_TIMEOUT_PER_PAGE_MS = 400;
-const OPP_MAX_TIMEOUT_MS = 90_000;
-
-export async function getOpportunities(params?: {
-  pipelineId?: string;
-  pipelineStageId?: string;
-  status?: string;
-  assignedTo?: string;
-  limit?: number;
-  page?: number;
-}): Promise<GHLOpportunitiesResponse> {
-  const page = params?.page ?? 1;
-  // Opportunities search endpoint uses location_id (snake_case)
-  return ghlFetch<GHLOpportunitiesResponse>("/opportunities/search", {
-    useSnakeCaseLocationId: true,
-    timeoutMs: Math.min(
-      OPP_MAX_TIMEOUT_MS,
-      OPP_BASE_TIMEOUT_MS + page * OPP_TIMEOUT_PER_PAGE_MS
-    ),
-    params: {
-      pipelineId: params?.pipelineId,
-      pipelineStageId: params?.pipelineStageId,
-      status: params?.status,
-      assigned_to: params?.assignedTo,
-      limit: params?.limit ?? 100,
-      page,
-    },
-  });
-}
-```
-
-Con esos valores, la página 1 mantiene 30s, la 140 llega a 86s y el techo son 90s.
-
-- [ ] **Step 3: Verificar tipos**
-
-```bash
-npx tsc --noEmit
-```
-
-- [ ] **Step 4: Probar contra la sub-cuenta grande**
-
-```bash
-pnpm dev
-```
-
-Confirmar que las oportunidades ahora llegan completas y que ya no salen líneas
-`[GHL] page N failed` por timeout. Anotar cuánto tarda el sync completo — si se dispara,
-el dial es `OPP_TIMEOUT_PER_PAGE_MS`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add lib/ghl-client.ts
-git commit -m "fix(ghl): timeout escalado por profundidad de página en oportunidades
-
-/opportunities/search pagina por offset, así que la página 140 de una
-sub-cuenta de 14k rebasa el timeout plano de 30s. Contactos, que van por
-cursor, no sufren esto — de ahí que solo fallaran las oportunidades.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-```
-
-- [ ] **Step 6: Repetir la verificación final**
-
-Volver a correr la Task 7, Step 1 completa.
+La corrección real —migrar `getAllOpportunities` a cursor— se implementó dentro de la
+Task 2. Verificada en Grupo VAEO: 11,793 de 11,793 oportunidades, 14,085 de 14,085
+contactos, cero páginas faltantes.
 
 ---
 

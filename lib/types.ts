@@ -209,3 +209,20 @@ export interface Pauta {
   contactId?: string
   properties?: Record<string, string>
 }
+
+/**
+ * A dataset that did not come back clean in the last sync.
+ * `partial` = some pages never landed; `error` = nothing came back at all.
+ * Neither is the same as a legitimate zero, which produces no warning.
+ *
+ * Declared here rather than in the route or the hook because both sides consume
+ * it, and two copies would drift. `key` stays a plain string on purpose: tying
+ * it to the hook's StepKey would pull client types into lib/.
+ */
+export interface SyncWarning {
+  key: string
+  kind: "partial" | "error"
+  loaded: number
+  /** Total the API reported, when it reported one. */
+  expected?: number
+}
