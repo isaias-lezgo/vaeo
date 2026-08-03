@@ -2,7 +2,9 @@
 
 export interface StreamStep {
   key: string;
-  status: "loading" | "done";
+  // `partial` = came back known-incomplete; `error` = came back with nothing.
+  // Neither is the same as a legitimate zero, which is `done` with count 0.
+  status: "loading" | "retrying" | "done" | "partial" | "error";
   count?: number;
 }
 

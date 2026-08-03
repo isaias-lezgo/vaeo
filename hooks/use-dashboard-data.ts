@@ -9,8 +9,13 @@ import type {
   Pipeline,
   Pauta,
   Appointment,
+  SyncWarning,
 } from "@/lib/types";
 import { fetchStream } from "./fetch-stream";
+
+// Re-exported so components import it alongside the other dashboard types
+// rather than reaching into lib/types directly.
+export type { SyncWarning };
 
 export type StepKey =
   | "config"
@@ -20,8 +25,16 @@ export type StepKey =
   | "appointments"
   | "tasks";
 
+export type StepStatus =
+  | "pending"
+  | "loading"
+  | "retrying"
+  | "done"
+  | "partial"
+  | "error";
+
 export interface StepState {
-  status: "pending" | "loading" | "done";
+  status: StepStatus;
   count?: number;
 }
 
@@ -50,6 +63,9 @@ export interface DashboardData {
   pautas: Pauta[];
   locationId: string;
   locationName: string;
+  /** Datasets that came back incomplete or empty. Optional so a `data` frame
+   *  from an older deploy (a tab left open through a release) still parses. */
+  warnings?: SyncWarning[];
   meta: {
     totalContacts: number;
     totalOpportunities: number;
@@ -67,7 +83,13 @@ export function useDashboardData(params?: {
   const [progress, setProgress] = useState<string>("Iniciando sincronización…");
   const [locationName, setLocationName] = useState<string>("");
   const [steps, setSteps] = useState<StepMap>(INITIAL_STEPS);
+  const [elapsedMs, setElapsedMs] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const startedAtRef = useRef<number>(Date.now());
+  // Wall-clock of the last `step` frame. A sync that stops producing steps is
+  // stuck waiting on GHL, which used to look identical to a dead page — the
+  // counters just froze with no explanation.
+  const lastStepAtRef = useRef<number>(Date.now());
 
   const startDate = params?.startDate;
   const endDate = params?.endDate;
@@ -87,6 +109,9 @@ export function useDashboardData(params?: {
     setIsError(false);
     setProgress("Iniciando sincronización…");
     setSteps(INITIAL_STEPS);
+    startedAtRef.current = Date.now();
+    lastStepAtRef.current = Date.now();
+    setElapsedMs(0);
 
     try {
       const result = await fetchStream<DashboardData>(
@@ -94,11 +119,13 @@ export function useDashboardData(params?: {
         setProgress,
         ctrl.signal,
         setLocationName,
-        (step) =>
+        (step) => {
+          lastStepAtRef.current = Date.now();
           setSteps((prev) => ({
             ...prev,
             [step.key]: { status: step.status, count: step.count },
-          }))
+          }));
+        }
       );
       // Ignore the result of a fetch that has since been superseded (e.g. the
       // mount→abort→remount cycle from React StrictMode in dev or router.refresh
@@ -129,6 +156,18 @@ export function useDashboardData(params?: {
     };
   }, [load, startDate, endDate]);
 
+  // Drives the elapsed-time readout and stall detection. Runs only while
+  // loading, so an idle dashboard carries no timer.
+  useEffect(() => {
+    if (!isLoading) return;
+    const id = setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 1000);
+    return () => clearInterval(id);
+  }, [isLoading]);
+
+  // No step frame in 15s. The sync is alive but waiting on GHL — the state that
+  // used to render as a frozen screen with no explanation.
+  const stalled = isLoading && elapsedMs > 0 && Date.now() - lastStepAtRef.current > 15_000;
+
   const refresh = useCallback(() => {
     load(startDate, endDate);
   }, [load, startDate, endDate]);
@@ -140,6 +179,8 @@ export function useDashboardData(params?: {
     progress,
     locationName,
     steps,
+    elapsedMs,
+    stalled,
     refresh,
   };
 }

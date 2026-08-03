@@ -52,7 +52,8 @@ export default function DashboardPage() {
 
   useEffect(() => { document.title = TAB_TITLES[activeTab] }, [activeTab])
 
-  const { data, isLoading, isError, progress, locationName, steps, refresh } = useDashboardData({})
+  const { data, isLoading, isError, progress, locationName, steps, elapsedMs, stalled, refresh } =
+    useDashboardData({})
   const { messages } = useConversationsData()
 
   const [dateFilter, setDateFilter] = useState<DateFilter>({ preset: "all" })
@@ -108,7 +109,16 @@ export default function DashboardPage() {
   return (
     <>
     <AnimatePresence>
-      {isInitialLoad && <LoadingScreen key="loader" progress={progress} locationName={locationName} steps={steps} />}
+      {isInitialLoad && (
+        <LoadingScreen
+          key="loader"
+          progress={progress}
+          locationName={locationName}
+          steps={steps}
+          elapsedMs={elapsedMs}
+          stalled={stalled}
+        />
+      )}
     </AnimatePresence>
     <div className="flex min-h-screen flex-col bg-background">
       {/* Header */}

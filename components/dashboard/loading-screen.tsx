@@ -1,7 +1,7 @@
 "use client"
 
 import { motion, AnimatePresence } from "framer-motion"
-import type { StepKey, StepMap } from "@/hooks/use-dashboard-data"
+import type { StepKey, StepMap, StepStatus } from "@/hooks/use-dashboard-data"
 
 interface LoadingScreenProps {
   progress: string
@@ -9,6 +9,10 @@ interface LoadingScreenProps {
   locationName?: string
   /** Live per-dataset progress. All datasets load concurrently. */
   steps?: StepMap
+  /** Milliseconds since the sync started. */
+  elapsedMs?: number
+  /** No step frame has arrived in >15s — the API is throttling us. */
+  stalled?: boolean
 }
 
 // Visible rows, in display order, with their Spanish labels. These mirror the
@@ -87,6 +91,47 @@ function SyncRing() {
   )
 }
 
+// Visual treatment per step state. `retrying` and `partial` are amber (the sync
+// is coping), `error` is destructive (the dataset is gone). All three terminal
+// states count toward the progress bar — the sync really did move on.
+const STEP_STYLE: Record<
+  StepStatus,
+  { dot: string; label: string; note?: string; noteClass?: string }
+> = {
+  pending: {
+    dot: "border border-border bg-muted/50 text-muted-foreground",
+    label: "text-muted-foreground/60",
+  },
+  loading: {
+    dot: "border-2 border-primary bg-primary/10 text-primary",
+    label: "font-medium text-foreground",
+  },
+  retrying: {
+    dot: "border-2 border-amber-500 bg-amber-500/10 text-amber-500",
+    label: "font-medium text-foreground",
+    note: "reintentando…",
+    noteClass: "text-amber-500",
+  },
+  done: {
+    dot: "bg-primary text-primary-foreground",
+    label: "text-muted-foreground",
+  },
+  partial: {
+    dot: "bg-amber-500 text-white",
+    label: "text-muted-foreground",
+    note: "parcial",
+    noteClass: "text-amber-500",
+  },
+  error: {
+    dot: "bg-destructive text-destructive-foreground",
+    label: "text-muted-foreground",
+    note: "error",
+    noteClass: "text-destructive",
+  },
+}
+
+const SETTLED_STATUSES: StepStatus[] = ["done", "partial", "error"]
+
 function StepRow({
   label,
   status,
@@ -94,12 +139,13 @@ function StepRow({
   delay,
 }: {
   label: string
-  status: "pending" | "loading" | "done"
+  status: StepStatus
   count?: number
   delay: number
 }) {
-  const isDone = status === "done"
-  const isActive = status === "loading"
+  const style = STEP_STYLE[status]
+  const isSettled = SETTLED_STATUSES.includes(status)
+  const isSpinning = status === "loading" || status === "retrying"
 
   return (
     <motion.div
@@ -109,21 +155,19 @@ function StepRow({
       transition={{ delay, duration: 0.3 }}
     >
       <span
-        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold transition-colors duration-300 ${
-          isDone
-            ? "bg-primary text-primary-foreground"
-            : isActive
-              ? "border-2 border-primary bg-primary/10 text-primary"
-              : "border border-border bg-muted/50 text-muted-foreground"
-        }`}
+        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold transition-colors duration-300 ${style.dot}`}
       >
-        {isDone ? (
+        {status === "done" || status === "partial" ? (
           <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M2 6l3 3 5-6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-        ) : isActive ? (
+        ) : status === "error" ? (
+          <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 3l6 6M9 3l-6 6" strokeLinecap="round" />
+          </svg>
+        ) : isSpinning ? (
           <motion.span
-            className="h-1.5 w-1.5 rounded-full bg-primary"
+            className={`h-1.5 w-1.5 rounded-full ${status === "retrying" ? "bg-amber-500" : "bg-primary"}`}
             animate={{ scale: [1, 1.35, 1], opacity: [1, 0.6, 1] }}
             transition={{ duration: 1, repeat: Infinity }}
           />
@@ -132,29 +176,27 @@ function StepRow({
         )}
       </span>
 
-      <span
-        className={`flex-1 text-sm transition-colors duration-300 ${
-          isActive ? "font-medium text-foreground" : isDone ? "text-muted-foreground" : "text-muted-foreground/60"
-        }`}
-      >
+      <span className={`flex-1 text-sm transition-colors duration-300 ${style.label}`}>
         {label}
       </span>
 
-      {/* Live count: shows the running total while loading and the final total
-          when done. Tabular numerals keep the column from jittering as digits
-          change. */}
-      <span className="min-w-[3.5rem] text-right text-xs tabular-nums">
-        {count !== undefined && (isActive || isDone) ? (
+      {/* Live count: running total while loading, final total once settled.
+          Tabular numerals keep the column from jittering as digits change. */}
+      <span className="flex min-w-[3.5rem] items-center justify-end gap-2 text-right text-xs tabular-nums">
+        {style.note && (
+          <span className={`text-[11px] font-medium ${style.noteClass}`}>{style.note}</span>
+        )}
+        {count !== undefined && (isSpinning || isSettled) ? (
           <motion.span
             key={`${status}-${count}`}
-            className={isDone ? "font-medium text-foreground" : "text-muted-foreground"}
+            className={isSettled ? "font-medium text-foreground" : "text-muted-foreground"}
             initial={{ opacity: 0.4 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.15 }}
           >
             {count.toLocaleString("es-MX")}
           </motion.span>
-        ) : isActive ? (
+        ) : isSpinning ? (
           <span className="text-muted-foreground/60">…</span>
         ) : null}
       </span>
@@ -162,12 +204,27 @@ function StepRow({
   )
 }
 
-export function LoadingScreen({ progress, locationName, steps }: LoadingScreenProps) {
+export function LoadingScreen({
+  progress,
+  locationName,
+  steps,
+  elapsedMs = 0,
+  stalled = false,
+}: LoadingScreenProps) {
   const resolved = steps ?? FALLBACK_STEPS
 
   const total = STEP_ROWS.length
-  const completed = STEP_ROWS.filter((s) => resolved[s.key].status === "done").length
+  // Every terminal state advances the bar, not just `done` — a dataset that
+  // came back partial or failed is still one the sync is finished with.
+  const completed = STEP_ROWS.filter((s) =>
+    SETTLED_STATUSES.includes(resolved[s.key].status)
+  ).length
   const pct = Math.round((completed / total) * 100)
+
+  const mmss = (ms: number) => {
+    const secs = Math.floor(ms / 1000)
+    return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`
+  }
 
   return (
     <motion.div
@@ -255,20 +312,25 @@ export function LoadingScreen({ progress, locationName, steps }: LoadingScreenPr
                 transition={{ duration: 0.4, ease: "easeOut" }}
               />
             </div>
-            <div className="flex min-h-[1.25rem] items-center justify-between text-xs text-muted-foreground">
+            <div className="flex min-h-[1.25rem] items-center justify-between text-xs">
               <AnimatePresence mode="wait">
                 <motion.span
-                  key={progress}
-                  className="max-w-[70%] truncate"
+                  key={stalled ? "stalled" : progress}
+                  className={`max-w-[65%] truncate ${stalled ? "text-amber-500" : "text-muted-foreground"}`}
                   initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.2 }}
                 >
-                  {progress || "Sincronizando…"}
+                  {stalled
+                    ? "Lezgo Suite CRM está limitando las solicitudes — esto puede tardar"
+                    : progress || "Sincronizando…"}
                 </motion.span>
               </AnimatePresence>
-              <span className="tabular-nums">{pct}%</span>
+              <span className="flex items-center gap-2 tabular-nums text-muted-foreground">
+                {elapsedMs > 0 && <span>{mmss(elapsedMs)}</span>}
+                <span>{pct}%</span>
+              </span>
             </div>
           </div>
         </div>
