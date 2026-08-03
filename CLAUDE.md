@@ -59,14 +59,16 @@ pnpm verify:clients      # lib/clients.ts   — roster parsing + password lookup
 pnpm verify:auth         # lib/auth.ts      — session token; incl. the cookie-tamper rejection
 pnpm verify:limiter      # lib/ghl-limiter.ts — per-location isolation
 pnpm verify:attachments  # lib/attachments.ts + lib/attachment-tools.ts — tabular parse/query/join
+pnpm verify:paged        # lib/paged-fetch.ts — resiliencia del abanico de páginas
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
 **No test framework, and not adopting one.** Instead, the pure modules where a silent
 bug would be a *cross-tenant data leak* (clients / auth / limiter) or a silently wrong
-answer (attachments) have assertion scripts under `scripts/verify-*.ts` (plain
-`node:assert/strict`, run via `tsx`). Run them after touching auth, the roster, the
-limiter, or the attachment parsers. Everything else is verified by driving the real app.
+answer (attachments / paged-fetch) have assertion scripts under `scripts/verify-*.ts`
+(plain `node:assert/strict`, run via `tsx`). Run them after touching auth, the roster,
+the limiter, the attachment parsers, or the pagination helpers. Everything else is
+verified by driving the real app.
 
 There is no way to run a single assertion within a script — each `verify:*` script is
 the unit. Run the one that covers the module you touched.
@@ -227,7 +229,16 @@ Verification scripts (no test framework in this repo): `pnpm verify:clients`,
 
 The dashboard fetch streams NDJSON progress frames rather than returning a single JSON blob, so the UI can show live progress during the multi-second GHL sync:
 - `{ type: "location", name }` — sub-account name (resolved first, for the loading header).
-- `{ type: "step", key, status, count }` — structured per-dataset progress. `key` ∈ `config | contacts | opportunities | pautas | appointments | tasks`; `status` ∈ `loading | done`. Because those datasets are fetched **concurrently**, the loading screen (`components/dashboard/loading-screen.tsx`) renders one live row per dataset with a running count, plus a determinate progress bar driven by completed-step count.
+- `{ type: "step", key, status, count }` — structured per-dataset progress. `key` ∈
+  `config | contacts | opportunities | pautas | appointments | tasks`; `status` ∈
+  `loading | retrying | done | partial | error`. `partial` means the dataset came back
+  known-incomplete (some pages never landed) and `error` means it came back with nothing
+  — neither is the same as a legitimate zero, which is `done` with `count: 0`. The `data`
+  frame carries a matching `warnings[]` that drives the dashboard's amber banner
+  (`components/dashboard/sync-warning-banner.tsx`). Because those datasets are fetched
+  **concurrently**, the loading screen (`components/dashboard/loading-screen.tsx`) renders
+  one live row per dataset with a running count, plus a determinate progress bar driven by
+  completed-step count.
 - `{ type: "progress", message }` — human-readable fallback text.
 - `{ type: "data", ... }` / `{ type: "error", ... }` — terminal frames.
 
