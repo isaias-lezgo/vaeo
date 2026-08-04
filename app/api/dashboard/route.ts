@@ -55,7 +55,15 @@ function buildCampaignLabel(content?: string, campaign?: string): string | undef
 }
 
 function resolveCustomFields(
-  fields: Array<{ id: string; value?: unknown; fieldValue?: unknown; fieldValueString?: unknown }> | undefined,
+  fields:
+    | Array<{
+        id: string;
+        value?: unknown;
+        fieldValue?: unknown;
+        fieldValueString?: unknown;
+        fieldValueDate?: unknown;
+      }>
+    | undefined,
   map: Map<string, string>
 ): Record<string, string | string[]> {
   if (!fields?.length || !map.size) return {};
@@ -65,8 +73,18 @@ function resolveCustomFields(
     if (!name) continue;
     // contacts use value; opportunities use fieldValue/fieldValueString.
     // Multi-option/checkbox fields arrive as an array of strings.
-    const raw = f.fieldValue ?? f.fieldValueString ?? f.value;
+    // GHL DATE fields use NONE of those three — they arrive as fieldValueDate,
+    // an epoch in milliseconds at UTC midnight. Normalized to ISO here so
+    // consumers never have to know the field was a date; customFieldsResolved
+    // stays string-valued.
+    const raw = f.fieldValue ?? f.fieldValueString ?? f.value ?? f.fieldValueDate;
     if (raw === undefined || raw === null) continue;
+    if (f.fieldValueDate != null && raw === f.fieldValueDate) {
+      const ms = typeof raw === "number" ? raw : Number(raw);
+      if (!Number.isFinite(ms)) continue;
+      result[name] = new Date(ms).toISOString();
+      continue;
+    }
     if (Array.isArray(raw)) {
       const arr = raw.map((v) => String(v)).filter((s) => s.trim() !== "");
       if (arr.length === 1) result[name] = arr[0];

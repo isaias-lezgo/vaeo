@@ -10,7 +10,9 @@ import type {
   Pipeline,
   Message,
 } from "@/lib/types"
-import { DashboardShell, PanelPlaceholder } from "./dashboard-ui"
+import type { ResolvedDateRange } from "@/lib/date-range"
+import { DashboardShell } from "./dashboard-ui"
+import { SalesPivotTable } from "./sales-pivot-table"
 
 /**
  * VAEO — one of the two business lines (oficinas virtuales / oficinas equipadas
@@ -50,25 +52,42 @@ export interface VaeoDashboardProps {
   locationName?: string
   /** Human label of the active date filter, for report covers. */
   periodLabel?: string
+  /**
+   * Resolved global date range. Charts that measure a date OTHER than createdAt
+   * (the pivot table measures the close date) filter the `all*` sets themselves
+   * instead of using the pre-filtered props.
+   */
+  dateRange?: ResolvedDateRange | null
 }
 
 export function VaeoDashboard({
-  opportunities,
   contacts,
+  allContacts = [],
+  allOpportunities = [],
+  pipelines = [],
+  dateRange = null,
+  tasks = [],
+  calls = [],
+  allPautas = [],
   appointments = [],
-  pautas = [],
+  messages = [],
+  locationId,
 }: VaeoDashboardProps) {
   return (
     <DashboardShell>
-      <PanelPlaceholder
-        brand="VAEO"
-        tagline="Oficinas virtuales, oficinas equipadas y salas de juntas"
-        counts={[
-          { label: "contactos", value: contacts.length },
-          { label: "oportunidades", value: opportunities.length },
-          { label: "citas", value: appointments.length },
-          { label: "pautas", value: pautas.length },
-        ]}
+      <SalesPivotTable
+        panel="vaeo"
+        allOpportunities={allOpportunities}
+        contacts={contacts}
+        allContacts={allContacts}
+        pipelines={pipelines}
+        dateRange={dateRange}
+        tasks={tasks}
+        calls={calls}
+        allPautas={allPautas}
+        appointments={appointments}
+        messages={messages}
+        locationId={locationId}
       />
     </DashboardShell>
   )

@@ -7,6 +7,8 @@ import { AnimatePresence } from "framer-motion"
 import { VaeoDashboard } from "@/components/dashboard/vaeo-dashboard"
 import { DateRangeFilter } from "@/components/dashboard/date-range-filter"
 import { filterByDateRange, resolveDateRange, type DateFilter } from "@/lib/date-range"
+import { applyHubspotFilter, isHubspotImport } from "@/lib/hubspot-import"
+import { HubspotImportToggle } from "@/components/dashboard/hubspot-import-toggle"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
 import { MeshDashboard } from "@/components/dashboard/mesh-dashboard"
@@ -60,6 +62,23 @@ export default function DashboardPage() {
   const [dateFilter, setDateFilter] = useState<DateFilter>({ preset: "all" })
   const dateRange = useMemo(() => resolveDateRange(dateFilter), [dateFilter])
 
+  // Panel-wide scope toggle, OFF by default: the HubSpot migration stamped its
+  // own bulk close date on every deal it created, so including them piles ~76%
+  // of the won opportunities onto the month the migration ran. Applied here, at
+  // the source, so BOTH the date-filtered slices and the unfiltered `all*`
+  // lookup sets agree — a drill-down must never surface a record the charts are
+  // excluding. The AI assistant is deliberately left out (it always reasons over
+  // the full dataset), same as the date filter.
+  const [includeHubspot, setIncludeHubspot] = useState(false)
+  const scopedOpportunities = useMemo(
+    () => applyHubspotFilter(data?.opportunities ?? [], includeHubspot),
+    [data?.opportunities, includeHubspot]
+  )
+  const hubspotImportCount = useMemo(
+    () => (data?.opportunities ?? []).filter(isHubspotImport).length,
+    [data?.opportunities]
+  )
+
   // Human label of the active date filter, for the PDF report cover.
   const periodLabel = useMemo(() => {
     switch (dateFilter.preset) {
@@ -79,8 +98,8 @@ export default function DashboardPage() {
     [data?.contacts, dateRange]
   )
   const opportunities = useMemo(
-    () => filterByDateRange(data?.opportunities ?? [], (o) => o.createdAt, dateRange),
-    [data?.opportunities, dateRange]
+    () => filterByDateRange(scopedOpportunities, (o) => o.createdAt, dateRange),
+    [scopedOpportunities, dateRange]
   )
   const calls = useMemo(
     () => filterByDateRange(data?.calls ?? [], (c) => c.createdAt, dateRange),
@@ -285,7 +304,17 @@ export default function DashboardPage() {
       </nav>
 
       {activeTab !== "conversations" && (
-        <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
+        <DateRangeFilter
+          value={dateFilter}
+          onChange={setDateFilter}
+          trailing={
+            <HubspotImportToggle
+              checked={includeHubspot}
+              onCheckedChange={setIncludeHubspot}
+              importedCount={hubspotImportCount}
+            />
+          }
+        />
       )}
 
       {/* Dashboard Content */}
@@ -297,7 +326,7 @@ export default function DashboardPage() {
         {activeTab === "vaeo" && (
           <VaeoDashboard
             opportunities={opportunities}
-            allOpportunities={data?.opportunities ?? []}
+            allOpportunities={scopedOpportunities}
             contacts={contacts}
             allContacts={data?.contacts ?? []}
             pautas={pautas}
@@ -313,12 +342,13 @@ export default function DashboardPage() {
             locationId={data?.locationId ?? ""}
             locationName={locationName ?? undefined}
             periodLabel={periodLabel}
+            dateRange={dateRange}
           />
         )}
         {activeTab === "mesh" && (
           <MeshDashboard
             opportunities={opportunities}
-            allOpportunities={data?.opportunities ?? []}
+            allOpportunities={scopedOpportunities}
             contacts={contacts}
             allContacts={data?.contacts ?? []}
             pautas={pautas}
@@ -334,6 +364,7 @@ export default function DashboardPage() {
             locationId={data?.locationId ?? ""}
             locationName={locationName ?? undefined}
             periodLabel={periodLabel}
+            dateRange={dateRange}
           />
         )}
         {/* Kept permanently mounted (hidden when inactive) so the AI chat

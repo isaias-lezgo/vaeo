@@ -27,6 +27,8 @@ const PRESET_OPTIONS: Array<{ label: string; value: DateFilterPreset }> = [
 interface DateRangeFilterProps {
   value: DateFilter
   onChange: (value: DateFilter) => void
+  /** Extra panel-wide controls rendered at the end of the same bar. */
+  trailing?: React.ReactNode
   className?: string
 }
 
@@ -36,7 +38,7 @@ function formatCustomLabel(from?: Date, to?: Date) {
   return to ? `${fmt(from)} – ${fmt(to)}` : fmt(from)
 }
 
-export function DateRangeFilter({ value, onChange, className }: DateRangeFilterProps) {
+export function DateRangeFilter({ value, onChange, trailing, className }: DateRangeFilterProps) {
   const [customOpen, setCustomOpen] = React.useState(false)
   const isCustom = value.preset === "custom"
 
@@ -59,7 +61,7 @@ export function DateRangeFilter({ value, onChange, className }: DateRangeFilterP
 
   return (
     <section
-      aria-label="Filtro de fechas"
+      aria-label="Filtros del panel"
       className={cn(
         "sticky top-0 z-40 border-b border-border/60",
         "bg-[hsl(214_30%_92%)]/80 backdrop-blur-md",
@@ -142,6 +144,8 @@ export function DateRangeFilter({ value, onChange, className }: DateRangeFilterP
             </div>
           </PopoverContent>
         </Popover>
+
+        {trailing && <div className="ml-auto flex items-center gap-2">{trailing}</div>}
       </div>
     </section>
   )
