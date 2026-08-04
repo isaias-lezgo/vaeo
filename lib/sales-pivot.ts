@@ -86,6 +86,12 @@ export function buildSalesPivot(
   opps: Opportunity[],
   opts: { sucursalField: string }
 ): SalesPivot {
+  // Wins come from isWonOpp(), the repo's single definition: status "won", or a
+  // stage named "Ganado" on an opportunity that is not explicitly lost.
+  // Measured against production on 2026-08-04 the strict `status === "won"` rule
+  // would select the identical set — 648 in VAEO, 42 in MESH, zero divergence
+  // either way — so the shared helper costs nothing here and keeps this table
+  // agreeing with every other won-based metric.
   const won = opps.filter(isWonOpp)
 
   // Pass 1 — bucket every won opp and accumulate the totals that drive ordering.

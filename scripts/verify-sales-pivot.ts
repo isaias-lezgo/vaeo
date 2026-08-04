@@ -1,4 +1,6 @@
-// Verification for lib/sales-pivot.ts + lib/panel-scope.ts.
+// Verification for lib/sales-pivot.ts + lib/panel-scope.ts + lib/hubspot-import.ts —
+// the three pure modules that decide WHICH opportunities a panel is talking about
+// and what they add up to.
 // Run: pnpm verify:pivot
 //
 // These two modules answer a question in money, and a wrong answer looks
@@ -19,6 +21,7 @@ import {
   TOTAL_KEY,
 } from "../lib/sales-pivot";
 import { PANEL_SCOPES, resolvePipelineId, scopeOpportunities } from "../lib/panel-scope";
+import { applyHubspotFilter, hasHubspotId, isHubspotImport } from "../lib/hubspot-import";
 
 const SUCURSAL_FIELD = PANEL_SCOPES.vaeo.sucursalField; // "Sucursal VAEO"
 
@@ -204,6 +207,86 @@ function main() {
     ];
     assert.equal(scopeOpportunities(mixed, "vaeo", pipelines).length, 1, "solo el pipeline del panel");
     assert.equal(scopeOpportunities(mixed, "mesh", pipelines).length, 1);
+  }
+
+  // 9. hubspot-import: which opportunities the panel-wide toggle drops.
+  {
+    // The real migration date in this account. Every migrated record shares it.
+    const MIGRATED = "2026-03-20T00:00:00.000Z";
+
+    // A migrated opportunity: HubSpot id + created on the migration run.
+    const migrated = (fieldName: string, id: string, cierre?: string) => {
+      const o = opp({ value: 1, sucursal: "MTY Tanarah", cierre });
+      o.createdAt = MIGRATED;
+      o.customFieldsResolved = { ...o.customFieldsResolved, [fieldName]: id };
+      return o;
+    };
+
+    // --- signal 1: the id field, matched loosely by name ---
+    // Closed inside the migration month ⇒ HubSpot's own bookkeeping.
+    assert.equal(hasHubspotId(migrated("ID Oportunidad HS", "1")), true, "ID Oportunidad HS");
+    assert.equal(hasHubspotId(migrated("ID Hubspot", "1")), true, "ID Hubspot");
+    assert.equal(hasHubspotId(migrated("HubSpot ID", "1")), true, "HubSpot ID");
+
+    // An empty value is not an import — the field exists on every opp in some
+    // accounts, blank on the ones that were never migrated.
+    assert.equal(hasHubspotId(migrated("ID Oportunidad HS", "   ")), false, "campo vacío no cuenta");
+    assert.equal(hasHubspotId(opp({ value: 1 })), false, "sin el campo no cuenta");
+
+    // "Fecha de Creación import" is a different migration leftover: it says
+    // nothing about HubSpot and must not drag rows out of the panel.
+    assert.equal(
+      hasHubspotId(migrated("Fecha de Creación import", "2026-03-01")),
+      false,
+      "otro campo de importación no cuenta"
+    );
+    // Needs an id word too, so a bare "Sucursal HS" would not qualify.
+    assert.equal(hasHubspotId(migrated("Sucursal HS", "MTY")), false, "sin 'id' no cuenta");
+
+    // --- signal 2: closed inside the migration month, or later in the CRM ---
+    const imported = migrated("ID Oportunidad HS", "9", "2026-03-05T00:00:00.000Z");
+    assert.equal(isHubspotImport(imported), true, "cierre antes de migrar ⇒ importación");
+    assert.equal(
+      isHubspotImport(migrated("ID Oportunidad HS", "9", "2026-03-31T00:00:00.000Z")),
+      true,
+      "cierre a fin del mes de la migración ⇒ importación (los 7 casos de 21-31 mar)"
+    );
+    assert.equal(
+      isHubspotImport(migrated("ID Oportunidad HS", "9", "2026-04-01T00:00:00.000Z")),
+      false,
+      "cierre el mes siguiente ⇒ se trabajó en el CRM, cuenta como venta"
+    );
+    assert.equal(
+      isHubspotImport(migrated("ID Oportunidad HS", "9")),
+      true,
+      "migrada sin fecha de cierre ⇒ importación"
+    );
+    // An organic deal is never an import, whatever its dates.
+    const organic = opp({ value: 1, sucursal: "MTY Tanarah", cierre: "2026-03-05T00:00:00.000Z" });
+    assert.equal(isHubspotImport(organic), false, "sin ID de HubSpot nunca es importación");
+
+    const both = [imported, organic];
+    assert.equal(applyHubspotFilter(both, false).length, 1, "apagado: se va la importada");
+    assert.equal(applyHubspotFilter(both, false)[0].id, organic.id, "apagado: queda la orgánica");
+    assert.equal(applyHubspotFilter(both, true), both, "prendido: misma referencia, sin copia");
+
+    // The toggle must move the pivot's money, not just its row count — and the
+    // deal migrated open then won in the CRM must survive it.
+    const bulk = migrated("ID Oportunidad HS", "9", "2026-03-05T00:00:00.000Z");
+    bulk.value = 1000;
+    const workedHere = migrated("ID Oportunidad HS", "10", "2026-06-05T00:00:00.000Z");
+    workedHere.value = 500;
+    const native = opp({
+      value: 25,
+      sucursal: "MTY Tanarah",
+      servicio: "Coworking",
+      cierre: "2026-06-05T00:00:00.000Z",
+    });
+    const set = [bulk, workedHere, native];
+    const on = buildSalesPivot(applyHubspotFilter(set, true), { sucursalField: SUCURSAL_FIELD });
+    const off = buildSalesPivot(applyHubspotFilter(set, false), { sucursalField: SUCURSAL_FIELD });
+    assert.equal(on.grandTotal, 1525, "prendido suma las tres");
+    assert.equal(off.grandTotal, 525, "apagado suma la orgánica y la migrada-pero-cerrada-aquí");
   }
 
   console.log("verify-sales-pivot: all assertions passed");

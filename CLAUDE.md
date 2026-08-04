@@ -60,7 +60,7 @@ pnpm verify:auth         # lib/auth.ts      — session token; incl. the cookie-
 pnpm verify:limiter      # lib/ghl-limiter.ts — per-location isolation
 pnpm verify:attachments  # lib/attachments.ts + lib/attachment-tools.ts — tabular parse/query/join
 pnpm verify:paged        # lib/paged-fetch.ts — resiliencia del abanico de páginas
-pnpm verify:pivot        # lib/sales-pivot.ts + lib/panel-scope.ts — el agregado de ventas
+pnpm verify:pivot        # lib/sales-pivot.ts + lib/panel-scope.ts + lib/hubspot-import.ts
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
@@ -362,6 +362,7 @@ bug class these modules were extracted to kill.
 | `lib/source-platform.ts` | "Origen de lead" platform bucketing + `PLATFORM_COLORS` / `PLATFORM_ORDER` |
 | `lib/csv.ts` | CSV cell escaping (`csvCell`, `buildCsv`) |
 | `lib/panel-scope.ts` | which pipeline + sucursal custom field each panel means |
+| `lib/hubspot-import.ts` | which opportunities arrived already-closed from the HubSpot migration |
 | `lib/sales-pivot.ts` | the ventas pivot aggregation (mes de cierre × sucursal › servicio) |
 
 - **`isWonOpp()`**: some sub-accounts never flip `status` to `"won"` — they record a sale
@@ -419,6 +420,17 @@ Both dashboards export a branded PDF via `components/dashboard/export-report-but
 - **No mock-data fallback**: when the GHL API is unavailable or errors, the UI renders against empty arrays (`data?.contacts ?? []` patterns in `app/page.tsx`). The former `lib/mock-data.ts` and its stand-ins have been removed.
 - **All GHL API calls are server-only**: `lib/ghl-client.ts` is never imported from client components — only from API routes. This keeps the token out of the browser bundle. Client code reaches GHL data through `lib/ghl-fetchers.ts`, which calls those routes.
 - **`/opportunities/search` uses `location_id` (snake_case)** while most other endpoints use `locationId` (camelCase). The `useSnakeCaseLocationId` flag in `ghlFetch` handles this quirk.
+- **"Importación HubSpot" is a second global filter, and it is OFF by default.** Grupo VAEO
+  migrated from HubSpot on 2026-03-20; deals HubSpot had already closed came over with a
+  close date inside that month, so 485 of the VAEO pipeline's 648 won opportunities pile
+  onto mar 2026. `lib/hubspot-import.ts` requires **both** a HubSpot id custom field **and**
+  a close date within the migration month — the 10 deals that arrived open and were later
+  won in the CRM ($267,163) are real sales and keep counting. Calibrated against the
+  client's Looker Studio report ("No es de Importación"), which the panel now matches **to
+  the cent** in every settled month. Applied in `app/page.tsx` to the opportunity set
+  *before* the date filter, so the date-filtered slices and the `all*` lookup sets agree —
+  a drill-down must never surface a record the charts excluded. The AI assistant is
+  deliberately exempt, same as the date filter.
 - **Filtering is entirely client-side and date-range only**: `lib/date-range.ts` (`DateFilter`, `resolveDateRange`, `filterByDateRange`) filters the already-fetched dataset by date; `components/dashboard/date-range-filter.tsx` is the UI. The filtered slices are computed in `app/page.tsx` and passed to each dashboard as props. The date filter bar is hidden on the AI assistant tab, which always sees the full dataset.
 - **`calls` is always empty** in live data — GHL doesn't expose a public calls endpoint in the standard API. **`tasks` is populated** via the location-wide `/locations/:id/tasks/search` endpoint (`searchLocationTasks`), fetched concurrently with the other datasets.
 - **Drill-downs resolve joins against the *unfiltered* set.** Dashboards take both
