@@ -60,15 +60,20 @@ pnpm verify:auth         # lib/auth.ts      — session token; incl. the cookie-
 pnpm verify:limiter      # lib/ghl-limiter.ts — per-location isolation
 pnpm verify:attachments  # lib/attachments.ts + lib/attachment-tools.ts — tabular parse/query/join
 pnpm verify:paged        # lib/paged-fetch.ts — resiliencia del abanico de páginas
+pnpm verify:pivot        # lib/sales-pivot.ts + lib/panel-scope.ts — el agregado de ventas
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
+`pnpm lint` is broken and has been for a while — `eslint` is not actually a dependency of
+this repo, so the script exits with `command not found`. `npx tsc --noEmit` is the real
+gate.
+
 **No test framework, and not adopting one.** Instead, the pure modules where a silent
 bug would be a *cross-tenant data leak* (clients / auth / limiter) or a silently wrong
-answer (attachments / paged-fetch) have assertion scripts under `scripts/verify-*.ts`
-(plain `node:assert/strict`, run via `tsx`). Run them after touching auth, the roster,
-the limiter, the attachment parsers, or the pagination helpers. Everything else is
-verified by driving the real app.
+answer (attachments / paged-fetch / sales-pivot) have assertion scripts under
+`scripts/verify-*.ts` (plain `node:assert/strict`, run via `tsx`). Run them after touching
+auth, the roster, the limiter, the attachment parsers, the pagination helpers, or the
+sales pivot. Everything else is verified by driving the real app.
 
 There is no way to run a single assertion within a script — each `verify:*` script is
 the unit. Run the one that covers the module you touched.
@@ -163,14 +168,17 @@ Consequences to keep in mind when building charts:
   filters over the same arrays; order doesn't matter as long as drill-downs still join
   against the unfiltered `all*` sets (see "Drill-downs" below).
 
-`app/page.tsx` currently passes the **full** opportunity/contact sets to both dashboards —
-the pipeline split is not implemented yet. Whichever chart lands first should establish
-the scoping helper; put it in `lib/` (not in a component) so both panels and the AI tools
-share one definition, per the "Shared domain rules" policy.
+`app/page.tsx` passes the **full** opportunity/contact sets to both dashboards; each chart
+applies the scope itself through **`lib/panel-scope.ts`** (`scopeOpportunities(opps, panel,
+pipelines)`), which is the single definition shared by both panels. `PANEL_SCOPES` also
+carries the per-panel **sucursal custom field** (`Sucursal VAEO` vs `Sucursal MESH`), since
+that differs between the two lines as well. `resolvePipelineId()` matches the pipeline by
+**name** and falls back to the hardcoded id.
 
 ### Current state
 
-- `components/dashboard/vaeo-dashboard.tsx` and `components/dashboard/mesh-dashboard.tsx` — **deliberately empty**. The old Marketing/Ventas charts were deleted wholesale so the two business-line panels can be rebuilt from scratch; each currently renders only `PanelPlaceholder`. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above).
+- `components/dashboard/vaeo-dashboard.tsx` renders its first chart, `sales-pivot-table.tsx` ("Resumen general de ventas"). `components/dashboard/mesh-dashboard.tsx` is still **deliberately empty** and renders only `PanelPlaceholder` — the old Marketing/Ventas charts were deleted wholesale so the two business-line panels could be rebuilt from scratch. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above).
+- Both panels also take **`dateRange`** (the resolved `ResolvedDateRange | null` from `app/page.tsx`). It exists for charts that measure a date *other than* `createdAt`: the pivot table filters `allOpportunities` by **Fecha de Cierre** itself, because the pre-filtered `opportunities` prop is cut by creation date and would silently drop an opportunity created outside the window but closed inside it.
 - Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
 - The third tab (`DashboardTab` id `"conversations"`, labelled **"Asistente IA"**) renders `conversations-chat.tsx`. It is **permanently mounted and merely hidden** when inactive, so the chat history survives tab switches — do not make it conditional. It always sees the full, unfiltered dataset.
 - Both dashboards can **export a branded PDF report** of their own charts (see "PDF report export").
@@ -353,6 +361,8 @@ bug class these modules were extracted to kill.
 | `lib/opportunity-status.ts` | `isWonOpp()` — canonical "won" detection |
 | `lib/source-platform.ts` | "Origen de lead" platform bucketing + `PLATFORM_COLORS` / `PLATFORM_ORDER` |
 | `lib/csv.ts` | CSV cell escaping (`csvCell`, `buildCsv`) |
+| `lib/panel-scope.ts` | which pipeline + sucursal custom field each panel means |
+| `lib/sales-pivot.ts` | the ventas pivot aggregation (mes de cierre × sucursal › servicio) |
 
 - **`isWonOpp()`**: some sub-accounts never flip `status` to `"won"` — they record a sale
   by moving the opportunity into a late stage ("09. Negocio Ganado") while `status`
@@ -430,6 +440,11 @@ Both dashboards export a branded PDF via `components/dashboard/export-report-but
   - Write (create/update): `{ id, key, field_value }`
   - Read (contacts): `{ id, value }`
   - Read (opportunities): `{ id, fieldValue }`
+- **DATE custom fields use `fieldValueDate`** — an epoch in **milliseconds at UTC
+  midnight**, not `fieldValue`/`fieldValueString`/`value`. `resolveCustomFields()` in
+  `app/api/dashboard/route.ts` normalizes it to ISO so `customFieldsResolved` stays
+  string-valued. Bucket such dates with **UTC** getters: read in `America/Mexico_City`, a
+  close on the 1st at 00:00Z lands in the previous month.
 - **Tags on contacts**: sending `tags` in update/upsert **overwrites all existing tags**. Use `/contacts/:id/tags` (POST/DELETE) for incremental changes.
 - **Opportunity status** valid values: `open`, `won`, `lost`, `abandoned`, `all` (`all` is search-filter only).
 - **`lostReasonId`** is only relevant when status is `"lost"`.
