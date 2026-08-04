@@ -125,9 +125,52 @@ All are server-side only. `DASHBOARD_CLIENTS` is read in `lib/clients.ts`;
 
 This is a single-page Next.js 16 (App Router) dashboard that surfaces GoHighLevel CRM data in three tabs: **VAEO**, **MESH**, and **Asistente IA**. The multi-tenant machinery from the shared panel is still in place (a client's password resolves to their own GHL sub-account — see "Multi-client" below), but this deployment serves Grupo VAEO only.
 
+### Panel scope: the pipeline IS the business line
+
+**The two panels are the same charts over two different pipelines.** Every chart in the
+VAEO tab counts only contacts whose opportunity lives in the **VAEO** pipeline; every
+chart in the MESH tab counts only contacts whose opportunity lives in the **MESH**
+pipeline. Nothing else distinguishes the tabs — build a chart once, and it should render
+in either panel with only the pipeline scope changing.
+
+Both pipelines live in the **same** GHL sub-account (`uDQiMzx1Iclb6gbJNRDY`, "Grupo VAEO"),
+so the main sync fetches them together and the split is client-side:
+
+| Pipeline | id | Stages |
+|---|---|---|
+| VAEO | `MiATYfkJWklaXqYc7hOr` | Nuevo Lead → Lead en proceso → Lead Perfilado → Propuesta → Negociación → Ganado → Perdido → Cliente Futuro |
+| MESH | `DkZiRWdizgMRt7osjuRb` | Nuevo Lead → Lead en proceso → Lead perfilado → Propuesta → Negociación → Ganado → Perdido → Cliente Futuro |
+
+The stage names are identical across the two (modulo the lowercase `perfilado` in MESH),
+which is what makes one chart implementation serve both. Match stages **by name**,
+case-insensitively — never by stage id — the same rule `isWonOpp()` already follows.
+
+Consequences to keep in mind when building charts:
+
+- **The opportunity is the entry point, not the contact.** A contact has no pipeline of
+  their own; they belong to a panel because one of their opportunities does. Scope by
+  filtering opportunities on `pipelineId`, then resolve contacts from that set.
+- A contact with opportunities in *both* pipelines legitimately appears in *both* panels.
+  That is not double-counting to fix — they are a lead for both business lines.
+- A contact with **no** opportunity belongs to no pipeline, so it can't be scoped to either
+  business line — but it is **never silently dropped**. Those contacts are leads that
+  nobody has moved into an embudo yet, which is exactly the leak worth watching. Surface
+  them in a **card at the top of the panel** ("Contactos sin oportunidad" — count +
+  drill-down to the list), above the pipeline-scoped charts, and keep them **out** of the
+  chart aggregates so the funnel numbers stay honest. Show the same card in both panels;
+  there is no data to attribute them to one line over the other.
+- The pipeline scope is applied **before** the date filter conceptually, but both are just
+  filters over the same arrays; order doesn't matter as long as drill-downs still join
+  against the unfiltered `all*` sets (see "Drill-downs" below).
+
+`app/page.tsx` currently passes the **full** opportunity/contact sets to both dashboards —
+the pipeline split is not implemented yet. Whichever chart lands first should establish
+the scoping helper; put it in `lib/` (not in a component) so both panels and the AI tools
+share one definition, per the "Shared domain rules" policy.
+
 ### Current state
 
-- `components/dashboard/vaeo-dashboard.tsx` and `components/dashboard/mesh-dashboard.tsx` — **deliberately empty**. The old Marketing/Ventas charts were deleted wholesale so the two business-line panels can be rebuilt from scratch; each currently renders only `PanelPlaceholder`. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged.
+- `components/dashboard/vaeo-dashboard.tsx` and `components/dashboard/mesh-dashboard.tsx` — **deliberately empty**. The old Marketing/Ventas charts were deleted wholesale so the two business-line panels can be rebuilt from scratch; each currently renders only `PanelPlaceholder`. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above).
 - Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
 - The third tab (`DashboardTab` id `"conversations"`, labelled **"Asistente IA"**) renders `conversations-chat.tsx`. It is **permanently mounted and merely hidden** when inactive, so the chat history survives tab switches — do not make it conditional. It always sees the full, unfiltered dataset.
 - Both dashboards can **export a branded PDF report** of their own charts (see "PDF report export").
