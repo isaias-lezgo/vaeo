@@ -10,6 +10,7 @@ import type {
   Pipeline,
   Message,
 } from "@/lib/types"
+import type { ResolvedDateRange } from "@/lib/date-range"
 import { DashboardShell, PanelPlaceholder } from "./dashboard-ui"
 
 /**
@@ -49,6 +50,12 @@ export interface MeshDashboardProps {
   locationName?: string
   /** Human label of the active date filter, for report covers. */
   periodLabel?: string
+  /**
+   * Resolved global date range. Charts that measure a date OTHER than createdAt
+   * (the pivot table measures the close date) filter the `all*` sets themselves
+   * instead of using the pre-filtered props.
+   */
+  dateRange?: ResolvedDateRange | null
 }
 
 export function MeshDashboard({

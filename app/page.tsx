@@ -313,6 +313,7 @@ export default function DashboardPage() {
             locationId={data?.locationId ?? ""}
             locationName={locationName ?? undefined}
             periodLabel={periodLabel}
+            dateRange={dateRange}
           />
         )}
         {activeTab === "mesh" && (
@@ -334,6 +335,7 @@ export default function DashboardPage() {
             locationId={data?.locationId ?? ""}
             locationName={locationName ?? undefined}
             periodLabel={periodLabel}
+            dateRange={dateRange}
           />
         )}
         {/* Kept permanently mounted (hidden when inactive) so the AI chat
