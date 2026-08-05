@@ -39,6 +39,8 @@ import {
   ChartCardHeader,
   ChartEmpty,
   DashboardCard,
+  MISSING_TEXT,
+  MissingAwareTick,
   NonZeroTooltipContent,
   ScopePill,
   SERIES_NEUTRALS,
@@ -68,6 +70,13 @@ type Dimension = "sucursal" | "servicio"
  * mes, su rectángulo no se dibuja y la etiqueta de ESE mes desaparece.
  */
 const TOTAL_ANCHOR = "__anchor"
+
+/**
+ * Esquinas del segmento que queda hasta arriba del stack. `Cell` tipa `radius`
+ * como el atributo SVG (`string | number`), pero Recharts lo reenvía tal cual a
+ * `Rectangle`, que sí entiende la tupla de cuatro esquinas — de ahí el cast.
+ */
+const TOP_RADIUS = [3, 3, 0, 0] as unknown as number
 
 export interface SalesByDimensionChartProps {
   panel: PanelId
@@ -178,8 +187,9 @@ export function SalesByDimensionChart({
   }, [slots])
 
   // Recharts consume filas planas: una por mes, con un dataKey por slot. Las
-  // series sin valor en un mes se dejan AUSENTES, no en cero: un cero dibuja un
-  // rectángulo de altura 0 cuyo trazo de 2px pinta una raya sobre la barra.
+  // series sin valor en un mes se dejan AUSENTES, no en cero — un cero mete un
+  // rectángulo de altura 0 en el stack, que además desordena el cálculo de qué
+  // segmento queda hasta arriba (topSlotByRow).
   const rows = useMemo(
     () =>
       data.buckets.map((b) => {
@@ -197,6 +207,20 @@ export function SalesByDimensionChart({
         return row
       }),
     [data.buckets, slots]
+  )
+
+  // Slot que queda hasta arriba del stack en CADA barra: es el único que lleva
+  // esquinas redondeadas, igual que los demás charts. No se puede fijar en la
+  // última serie renderizada — en un mes donde esa serie no tiene valor, su
+  // rectángulo no existe y esa barra se quedaría con el tope cuadrado.
+  const topSlotByRow = useMemo(
+    () =>
+      rows.map((row) => {
+        let top: string | null = null
+        for (const { slot } of slots) if (row[slot]) top = slot
+        return top
+      }),
+    [rows, slots]
   )
 
   const oppById = useMemo(
@@ -258,7 +282,7 @@ export function SalesByDimensionChart({
           <>
             <div
               data-chart={`chart-${chartId}`}
-              className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5"
+              className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1"
             >
               {slots.map(({ entry, slot }) => {
                 const dimmed = isolated !== null && isolated !== slot
@@ -274,36 +298,42 @@ export function SalesByDimensionChart({
                     title={`${entry.label} · ${money.format(entry.total)}`}
                   >
                     <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+                      className="h-2.5 w-2.5 shrink-0 rounded-sm"
                       style={{ backgroundColor: `var(--color-${slot})` }}
                       aria-hidden
                     />
-                    <span className="truncate">{labelOf(entry)}</span>
+                    {/* La serie "Sin sucursal" / "Sin servicio" lleva la
+                        etiqueta en rojizo, pero su muestra de color sigue en el
+                        gris de SERIES_NEUTRALS: ese cuadro tiene que casar con
+                        el segmento del stack. */}
+                    <span className={cn("truncate", entry.kind === "empty" && MISSING_TEXT)}>
+                      {labelOf(entry)}
+                    </span>
                   </button>
                 )
               })}
             </div>
 
-            <ChartContainer
-              id={chartId}
-              config={config}
-              className="aspect-auto h-[300px] w-full"
-            >
-              <BarChart data={rows} margin={{ top: 24, right: 12, bottom: 0, left: 8 }}>
-                <CartesianGrid vertical={false} stroke={CHART_GRID_STROKE} />
+            <ChartContainer id={chartId} config={config} className="h-[280px] w-full">
+              {/* Mismos márgenes que los demás charts, salvo el superior: ahí
+                  vive la etiqueta del total de cada barra, y con 5px se recorta
+                  sobre la barra más alta. */}
+              <BarChart data={rows} margin={{ top: 24, right: 8, left: 0, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={CHART_GRID_STROKE} />
                 <XAxis
                   dataKey="label"
+                  // El tick de "Sin fecha" va en rojizo; ver MissingAwareTick.
+                  tick={<MissingAwareTick />}
                   tickLine={false}
                   axisLine={false}
-                  tick={CHART_TICK}
-                  tickMargin={8}
-                  interval={0}
+                  interval="preserveStartEnd"
+                  minTickGap={12}
                 />
                 <YAxis
+                  tick={CHART_TICK}
                   tickLine={false}
                   axisLine={false}
-                  tick={CHART_TICK}
-                  width={64}
+                  width={44}
                   tickFormatter={(v: number) => moneyShort.format(v)}
                 />
                 <ChartTooltip
@@ -337,8 +367,11 @@ export function SalesByDimensionChart({
                     dataKey={slot}
                     stackId="ventas"
                     fill={`var(--color-${slot})`}
-                    stroke="hsl(var(--card))"
-                    strokeWidth={2}
+                    // Sin trazo separador: el apilado va continuo. Los tonos de
+                    // SERIES_PALETTE ya están validados por PARES —cualquier
+                    // combinación de la leyenda, no solo las vecinas— así que
+                    // dos segmentos contiguos se distinguen sin una línea de por
+                    // medio, y la barra se lee como un solo total.
                     onClick={(_: unknown, index: number) => openDrill(entry.key, index)}
                     className="cursor-pointer"
                   >
@@ -351,6 +384,7 @@ export function SalesByDimensionChart({
                         <Cell
                           key={rowIndex}
                           fillOpacity={(noDate ? 0.55 : 1) * (dimmed ? 0.18 : 1)}
+                          radius={topSlotByRow[rowIndex] === slot ? TOP_RADIUS : undefined}
                         />
                       )
                     })}
