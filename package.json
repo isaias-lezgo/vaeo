@@ -13,6 +13,7 @@
     "verify:attachments": "tsx scripts/verify-attachments.ts",
     "verify:paged": "tsx scripts/verify-paged-fetch.ts",
     "verify:pivot": "tsx scripts/verify-sales-pivot.ts",
+    "verify:filters": "tsx scripts/verify-panel-filters.ts",
     "add-client": "tsx scripts/add-client.ts"
   },
   "dependencies": {

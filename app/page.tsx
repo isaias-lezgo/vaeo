@@ -9,6 +9,21 @@ import { DateRangeFilter } from "@/components/dashboard/date-range-filter"
 import { filterByDateRange, resolveDateRange, type DateFilter } from "@/lib/date-range"
 import { applyHubspotFilter, isHubspotImport } from "@/lib/hubspot-import"
 import { HubspotImportToggle } from "@/components/dashboard/hubspot-import-toggle"
+import {
+  ActiveFiltersPill,
+  MultiSelectFilter,
+} from "@/components/dashboard/multi-select-filter"
+import {
+  activeFilterCount,
+  ADVISORS,
+  advisorKeyOf,
+  applyPanelFilters,
+  collectSucursales,
+  EMPTY_PANEL_FILTERS,
+  sucursalOf,
+  type PanelFilters,
+} from "@/lib/panel-filters"
+import { NO_SUCURSAL } from "@/lib/sales-pivot"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
 import { MeshDashboard } from "@/components/dashboard/mesh-dashboard"
@@ -19,6 +34,8 @@ import { useDashboardData } from "@/hooks/use-dashboard-data"
 import { useConversationsData } from "@/hooks/use-conversations-data"
 import {
   Building2,
+  MapPin,
+  UserRound,
   Network,
   RefreshCw,
   Loader2,
@@ -70,7 +87,7 @@ export default function DashboardPage() {
   // excluding. The AI assistant is deliberately left out (it always reasons over
   // the full dataset), same as the date filter.
   const [includeHubspot, setIncludeHubspot] = useState(false)
-  const scopedOpportunities = useMemo(
+  const hubspotScoped = useMemo(
     () => applyHubspotFilter(data?.opportunities ?? [], includeHubspot),
     [data?.opportunities, includeHubspot]
   )
@@ -78,6 +95,51 @@ export default function DashboardPage() {
     () => (data?.opportunities ?? []).filter(isHubspotImport).length,
     [data?.opportunities]
   )
+
+  // Los otros dos filtros de alcance: sucursal y asesor. Se aplican aquí, sobre
+  // el mismo set y antes del corte por fecha, por la misma razón que el de
+  // HubSpot: las slices filtradas y los sets `all*` que resuelven los
+  // drill-downs tienen que ver el mismo universo. Ver lib/panel-filters.ts.
+  const [panelFilters, setPanelFilters] = useState<PanelFilters>(EMPTY_PANEL_FILTERS)
+  const scopedOpportunities = useMemo(
+    () => applyPanelFilters(hubspotScoped, panelFilters),
+    [hubspotScoped, panelFilters]
+  )
+
+  // Las opciones y sus conteos se calculan SIN los filtros de panel puestos: si
+  // se calcularan sobre el set ya filtrado, elegir una sucursal dejaría el menú
+  // con una sola opción y sin manera de agregar otra.
+  const sucursalOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const o of hubspotScoped) {
+      const s = sucursalOf(o)
+      counts.set(s, (counts.get(s) ?? 0) + 1)
+    }
+    const named = collectSucursales(hubspotScoped).map((value) => ({
+      value,
+      label: value,
+      count: counts.get(value) ?? 0,
+    }))
+    const sinSucursal = counts.get(NO_SUCURSAL) ?? 0
+    // La cubeta vacía siempre al final y en gris: no es una sucursal, pero deja
+    // esos registros alcanzables desde la barra.
+    return sinSucursal > 0
+      ? [...named, { value: NO_SUCURSAL, label: NO_SUCURSAL, count: sinSucursal, muted: true }]
+      : named
+  }, [hubspotScoped])
+
+  const asesorOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const o of hubspotScoped) {
+      const key = advisorKeyOf(o)
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return ADVISORS.map((a) => ({
+      value: a.key,
+      label: a.label,
+      count: counts.get(a.key) ?? 0,
+    }))
+  }, [hubspotScoped])
 
   // Human label of the active date filter, for the PDF report cover.
   const periodLabel = useMemo(() => {
@@ -307,6 +369,29 @@ export default function DashboardPage() {
         <DateRangeFilter
           value={dateFilter}
           onChange={setDateFilter}
+          filters={
+            <>
+              <MultiSelectFilter
+                label="Sucursal"
+                icon={MapPin}
+                options={sucursalOptions}
+                selected={panelFilters.sucursales}
+                onChange={(sucursales) => setPanelFilters((f) => ({ ...f, sucursales }))}
+                emptyMessage="Ninguna oportunidad trae sucursal"
+              />
+              <MultiSelectFilter
+                label="Asesor"
+                icon={UserRound}
+                options={asesorOptions}
+                selected={panelFilters.asesores}
+                onChange={(asesores) => setPanelFilters((f) => ({ ...f, asesores }))}
+              />
+              <ActiveFiltersPill
+                count={activeFilterCount(panelFilters)}
+                onClear={() => setPanelFilters(EMPTY_PANEL_FILTERS)}
+              />
+            </>
+          }
           trailing={
             <HubspotImportToggle
               checked={includeHubspot}
