@@ -12,7 +12,13 @@ import type {
   Pipeline,
   Task,
 } from "@/lib/types"
-import { buildSalesPivot, closeDateOf, type PivotCell } from "@/lib/sales-pivot"
+import {
+  buildSalesPivot,
+  closeDateOf,
+  NO_SERVICIO,
+  NO_SUCURSAL,
+  type PivotCell,
+} from "@/lib/sales-pivot"
 import { PANEL_SCOPES, scopeOpportunities, type PanelId } from "@/lib/panel-scope"
 import { filterByDateRange, type ResolvedDateRange } from "@/lib/date-range"
 import { cn } from "@/lib/utils"
@@ -21,6 +27,7 @@ import {
   ChartCardHeader,
   ChartEmpty,
   DashboardCard,
+  MISSING_TEXT,
   ScopePill,
 } from "./dashboard-ui"
 import { ChartDrillDrawer, DRILL_CLOSED, type DrillState } from "./chart-drill-drawer"
@@ -102,6 +109,9 @@ export function SalesPivotTable({
   }, [pivot.columns])
 
   const stickyCol = "sticky left-0 z-20 bg-card"
+  // La cabecera va sobre una banda opaca (`bg-muted`, no un tinte con alfa):
+  // la primera columna es sticky y las celdas pasan por debajo al hacer scroll.
+  const stickyHead = "sticky left-0 z-20 bg-muted"
 
   return (
     <DashboardCard>
@@ -136,8 +146,8 @@ export function SalesPivotTable({
                   <th
                     rowSpan={2}
                     className={cn(
-                      stickyCol,
-                      "border-b border-r border-border px-3 py-2 text-left align-bottom font-semibold"
+                      stickyHead,
+                      "border-b border-r border-border px-3 py-2.5 text-left align-bottom text-[13px] font-semibold"
                     )}
                   >
                     Fecha de cierre
@@ -146,14 +156,17 @@ export function SalesPivotTable({
                     <th
                       key={g.sucursal}
                       colSpan={g.span}
-                      className="border-b border-r border-border px-3 py-2 text-center font-semibold"
+                      className={cn(
+                        "border-b border-r border-border bg-muted px-3 py-2.5 text-center text-sm font-semibold tracking-tight",
+                        g.sucursal === NO_SUCURSAL && MISSING_TEXT
+                      )}
                     >
                       {g.sucursal}
                     </th>
                   ))}
                   <th
                     rowSpan={2}
-                    className="border-b border-border px-3 py-2 align-bottom font-semibold"
+                    className="border-b border-border bg-muted px-3 py-2.5 align-bottom text-sm font-semibold tracking-tight"
                   >
                     Total
                   </th>
@@ -165,8 +178,9 @@ export function SalesPivotTable({
                       <th
                         key={c.key}
                         className={cn(
-                          "min-w-[7.5rem] border-b border-border px-3 py-2 font-medium text-muted-foreground",
-                          c.kind === "subtotal" && "border-r font-semibold text-foreground"
+                          "min-w-[7.5rem] border-b border-border bg-muted px-3 py-2 text-[13px] font-medium text-foreground",
+                          c.kind === "subtotal" && "border-r font-semibold",
+                          c.kind === "cell" && c.servicio === NO_SERVICIO && MISSING_TEXT
                         )}
                       >
                         {c.servicio}
@@ -183,7 +197,7 @@ export function SalesPivotTable({
                         stickyCol,
                         "whitespace-nowrap border-b border-r border-border px-3 py-2 text-left font-medium",
                         row.kind === "total" && "font-semibold",
-                        row.kind === "no-date" && "text-muted-foreground"
+                        row.kind === "no-date" && MISSING_TEXT
                       )}
                     >
                       {row.label}
@@ -203,14 +217,19 @@ export function SalesPivotTable({
                             openDrill(cell, `${row.label} — ${label}`, "Oportunidades ganadas")
                           }
                           className={cn(
-                            "border-b border-border px-3 py-2",
-                            (col.kind === "subtotal" || col.kind === "total") && "font-semibold",
+                            // Los números ceden peso a las cabeceras: las celdas
+                            // sueltas van en gris y sólo subtotales, totales y la
+                            // fila de totales se quedan en el color de texto pleno.
+                            "border-b border-border px-3 py-2 text-muted-foreground",
+                            (col.kind === "subtotal" || col.kind === "total") &&
+                              "font-semibold text-foreground",
+                            row.kind === "total" && "text-foreground",
                             col.kind === "subtotal" && "border-r",
                             cell.oppIds.length > 0 && "cursor-pointer hover:bg-muted/50"
                           )}
                         >
                           {cell.value === 0 ? (
-                            <span className="text-muted-foreground">–</span>
+                            <span className="text-muted-foreground/60">–</span>
                           ) : (
                             money.format(cell.value)
                           )}

@@ -12,6 +12,7 @@ import type {
 } from "@/lib/types"
 import type { ResolvedDateRange } from "@/lib/date-range"
 import { DashboardShell } from "./dashboard-ui"
+import { SalesPivotTable } from "./sales-pivot-table"
 import { SalesByDimensionChart } from "./sales-by-dimension-chart"
 import { OpportunityStatusChart } from "./opportunity-status-chart"
 import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
@@ -97,8 +98,23 @@ export function MeshDashboard({
 
   return (
     <DashboardShell>
+      <SalesPivotTable
+        panel="mesh"
+        allOpportunities={allOpportunities}
+        contacts={contacts}
+        allContacts={allContacts}
+        pipelines={pipelines}
+        dateRange={dateRange}
+        tasks={tasks}
+        calls={calls}
+        allPautas={allPautas}
+        appointments={appointments}
+        messages={messages}
+        locationId={locationId}
+      />
       {/* Mismo par de charts que en VAEO: solo cambia el embudo y, con él, el
-          campo de sucursal ("Sucursal MESH"), que resuelve PANEL_SCOPES. */}
+          campo de sucursal ("Sucursal MESH"), que resuelve PANEL_SCOPES. Sus
+          totales cuadran con los de la tabla de arriba. */}
       <div className="grid gap-5 lg:grid-cols-2">
         <SalesByDimensionChart {...shared} dimension="sucursal" dateRange={dateRange} />
         <SalesByDimensionChart {...shared} dimension="servicio" dateRange={dateRange} />
