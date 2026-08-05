@@ -49,6 +49,36 @@ export function chartPaletteColor(index: number): string {
   return CHART_PALETTE[index % CHART_PALETTE.length]
 }
 
+/**
+ * Paleta de las series apiladas de ventas. Separada de CHART_PALETTE a
+ * propósito: aquella se diseñó para barras y pays de UNA serie, y en un stack no
+ * pasa la validación — `#8b5cf6` y `#2563eb` quedan a ΔE 12.7 en visión normal
+ * (indistinguibles) y `#335577` cae bajo el piso de croma, es decir lee gris,
+ * que es justo el color reservado aquí para la cubeta vacía.
+ *
+ * Estos 5 tonos pasan las seis validaciones en modo `--pairs all` (cualquier par
+ * de la leyenda, no solo los vecinos del stack), en claro y en oscuro, contra la
+ * superficie real de la tarjeta. El modo oscuro tiene sus PROPIOS pasos: los
+ * tonos claros caen fuera de la banda de luminosidad sobre fondo oscuro.
+ *
+ * Cinco es el límite duro: con un sexto tono la validación falla. Una dimensión
+ * con más valores pliega su cola en "Otros" (ver lib/sales-series.ts).
+ */
+export const SERIES_PALETTE = {
+  light: ["#F59B1B", "#2563eb", "#22c55e", "#ec4899", "#06b6d4"],
+  dark: ["#d97706", "#2563eb", "#16a34a", "#ec4899", "#0891b2"],
+} as const
+
+/**
+ * Las dos cubetas que NO son una categoría real. Van en gris, fuera de la paleta
+ * categórica, y se distinguen entre sí por luminosidad: "Otros" pesa más que
+ * "sin dato capturado", así que va más oscuro en claro y más claro en oscuro.
+ */
+export const SERIES_NEUTRALS = {
+  otros: { light: "#4b5563", dark: "#9ca3af" },
+  empty: { light: "#9ca3af", dark: "#4b5563" },
+} as const
+
 // Brand icon for a canonical platform label. lucide ships Facebook/Instagram
 // but not TikTok/WhatsApp/Google, so those use inline brand SVGs. "Otro" and any
 // unknown label fall back to a neutral globe so every row keeps a leading glyph.
