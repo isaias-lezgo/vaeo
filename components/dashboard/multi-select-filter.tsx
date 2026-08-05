@@ -1,10 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { Check, ChevronDown, type LucideIcon } from "lucide-react"
+import { AlertTriangle, Check, ChevronDown, type LucideIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 
@@ -19,6 +20,12 @@ export interface MultiSelectOption {
    * gris, para que no compitan con una sucursal de verdad.
    */
   muted?: boolean
+  /**
+   * Aviso de grafía duplicada. Cuando viene, la fila muestra un ⚠ con este
+   * texto: es la señal de que el valor está mal capturado en el CRM, y es la
+   * razón de que el menú de categorías no agrupe las variantes.
+   */
+  variantHint?: string
 }
 
 interface MultiSelectFilterProps {
@@ -29,6 +36,11 @@ interface MultiSelectFilterProps {
   onChange: (values: string[]) => void
   /** Texto del popover cuando no hay ninguna opción en el dataset. */
   emptyMessage?: string
+  /**
+   * Muestra un buscador arriba de la lista. Para los menús largos (origen y
+   * canal listan una fila por grafía capturada, no una por categoría).
+   */
+  searchable?: boolean
   className?: string
 }
 
@@ -52,11 +64,26 @@ export function MultiSelectFilter({
   selected,
   onChange,
   emptyMessage = "Sin opciones disponibles",
+  searchable = false,
   className,
 }: MultiSelectFilterProps) {
   const [open, setOpen] = React.useState(false)
   const active = selected.length > 0
   const selectedSet = React.useMemo(() => new Set(selected), [selected])
+
+  const [query, setQuery] = React.useState("")
+
+  // Sin acentos ni mayúsculas: escribir "walk" tiene que encontrar "Walk In",
+  // "WALK IN" y "walk-in", que es justo la comparación que el usuario quiere
+  // hacer cuando anda cazando grafías repetidas.
+  const visible = React.useMemo(() => {
+    const q = query.trim()
+    if (!searchable || q === "") return options
+    const norm = (s: string) =>
+      s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    const needle = norm(q)
+    return options.filter((o) => norm(o.label).includes(needle))
+  }, [options, query, searchable])
 
   const toggle = (value: string) => {
     onChange(
@@ -67,7 +94,14 @@ export function MultiSelectFilter({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        // Que no quede una búsqueda vieja escondiendo opciones al reabrir.
+        if (!next) setQuery("")
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -92,33 +126,62 @@ export function MultiSelectFilter({
           </p>
         ) : (
           <>
+            {searchable && (
+              <div className="border-b border-border p-2">
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Buscar…"
+                  aria-label={`Buscar en ${label.toLowerCase()}`}
+                  className="h-7 text-[11px]"
+                />
+              </div>
+            )}
+
             {/* overflow-y-auto a secas: Radix ScrollArea rompe `truncate`. */}
             <div className="max-h-72 overflow-y-auto py-1">
-              {options.map((option) => {
-                const checked = selectedSet.has(option.value)
-                return (
-                  <label
-                    key={option.value}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-muted/60",
-                      option.muted && "text-muted-foreground"
-                    )}
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => toggle(option.value)}
-                      className="h-3.5 w-3.5 shrink-0"
-                      aria-label={option.label}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                    {option.count !== undefined && (
-                      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                        {option.count.toLocaleString("es-MX")}
-                      </span>
-                    )}
-                  </label>
-                )
-              })}
+              {visible.length === 0 ? (
+                <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+                  Sin coincidencias
+                </p>
+              ) : (
+                visible.map((option) => {
+                  const checked = selectedSet.has(option.value)
+                  return (
+                    <label
+                      key={option.value}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-muted/60",
+                        option.muted && "text-muted-foreground"
+                      )}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggle(option.value)}
+                        className="h-3.5 w-3.5 shrink-0"
+                        aria-label={option.label}
+                      />
+                      {/* La grafía se pinta VERBATIM: cualquier capitalización
+                          aquí volvería a esconder el error de captura. */}
+                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                      {option.variantHint && (
+                        <span
+                          title={option.variantHint}
+                          aria-label={option.variantHint}
+                          className="shrink-0"
+                        >
+                          <AlertTriangle className="h-3 w-3 text-amber-500" />
+                        </span>
+                      )}
+                      {option.count !== undefined && (
+                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                          {option.count.toLocaleString("es-MX")}
+                        </span>
+                      )}
+                    </label>
+                  )
+                })
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
