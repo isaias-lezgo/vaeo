@@ -62,6 +62,9 @@ pnpm verify:attachments  # lib/attachments.ts + lib/attachment-tools.ts — tabu
 pnpm verify:paged        # lib/paged-fetch.ts — resiliencia del abanico de páginas
 pnpm verify:pivot        # lib/sales-pivot.ts + lib/panel-scope.ts + lib/hubspot-import.ts
 pnpm verify:breakdown    # lib/opportunity-breakdown.ts — cubetas de estado + normalización de categorías
+pnpm verify:lost-matrix  # lib/lost-reason-matrix.ts — cruce motivo de perdido × categoría
+pnpm verify:advisors     # lib/advisor-breakdown.ts — matriz asesor × etapa + cubetas de estatus
+pnpm verify:filters      # lib/panel-filters.ts — filtros globales de sucursal y asesor
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
@@ -178,7 +181,7 @@ that differs between the two lines as well. `resolvePipelineId()` matches the pi
 
 ### Current state
 
-- Both panels now render charts; `PanelPlaceholder` is no longer used by either. **Shared by both** (identical code, only `panel` differs): `opportunity-status-chart.tsx`, `opportunity-win-rate-chart.tsx`, and two mounts of `category-breakdown-chart.tsx` (`OrigenDeLeadChart` / `CanalDeContactoChart`, both exported from that file with their tooltip copy), and two mounts of `sales-by-dimension-chart.tsx` (ventas apiladas por mes de cierre, cortadas por sucursal y por servicio — calcan los dos charts de Looker Studio que el cliente ya usa). **VAEO only**: `sales-pivot-table.tsx` ("Resumen general de ventas") — nobody has asked for it in MESH; sus totales y los de las barras salen del mismo agregado y `pnpm verify:pivot` asegura que cuadran. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above). Each panel builds one `shared` object and spreads it into every per-opportunity chart; keep that pattern rather than re-listing props per chart.
+- Both panels now render charts; `PanelPlaceholder` is no longer used by either. **Shared by both** (identical code, only `panel` differs): `opportunity-status-chart.tsx`, `opportunity-win-rate-chart.tsx`, `lost-reason-matrix.tsx` (tabla "Motivos de perdido": motivo × categoría, con un switch propio entre Canal de Contacto y Origen de Lead — el switch es estado local de la tarjeta, no un filtro global), `advisor-stage-table.tsx` (tabla "Oportunidades por asesor": asesor × etapa, con una barra apilada de estatus por fila; el sombreado se normaliza **por columna** y la fila "Sin asesor" queda fuera de esa normalización y del tinte, porque es un orden de magnitud mayor), and two mounts of `category-breakdown-chart.tsx` (`OrigenDeLeadChart` / `CanalDeContactoChart`, both exported from that file with their tooltip copy), and two mounts of `sales-by-dimension-chart.tsx` (ventas apiladas por mes de cierre, cortadas por sucursal y por servicio — calcan los dos charts de Looker Studio que el cliente ya usa). **VAEO only**: `sales-pivot-table.tsx` ("Resumen general de ventas") — nobody has asked for it in MESH; sus totales y los de las barras salen del mismo agregado y `pnpm verify:pivot` asegura que cuadran. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above). Each panel builds one `shared` object and spreads it into every per-opportunity chart; keep that pattern rather than re-listing props per chart.
 - **`ChartContainer` (`components/ui/chart.tsx`) already wraps its child in a Recharts `ResponsiveContainer`.** Do not nest another one inside it — the chart still renders, but Recharts logs "width and height are both fixed numbers" on every resize. Charts recovered from git history predate this and do nest one; drop it when you port them.
 - Both panels also take **`dateRange`** (the resolved `ResolvedDateRange | null` from `app/page.tsx`). It exists for charts that measure a date *other than* `createdAt`: the pivot table filters `allOpportunities` by **Fecha de Cierre** itself, because the pre-filtered `opportunities` prop is cut by creation date and would silently drop an opportunity created outside the window but closed inside it.
 - Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
@@ -364,10 +367,13 @@ bug class these modules were extracted to kill.
 | `lib/source-platform.ts` | "Origen de lead" platform bucketing + `PLATFORM_COLORS` / `PLATFORM_ORDER` |
 | `lib/csv.ts` | CSV cell escaping (`csvCell`, `buildCsv`) |
 | `lib/panel-scope.ts` | which pipeline + sucursal custom field each panel means |
+| `lib/panel-filters.ts` | los filtros globales de sucursal y asesor de la barra |
 | `lib/hubspot-import.ts` | which opportunities arrived already-closed from the HubSpot migration |
 | `lib/sales-pivot.ts` | the ventas pivot aggregation (mes de cierre × sucursal › servicio) |
 | `lib/sales-series.ts` | la agregación de las barras apiladas (mes de cierre × sucursal / servicio) |
 | `lib/opportunity-breakdown.ts` | won/open/lost bucketing per month + "Origen de Lead" / "Canal de Contacto" category rollups |
+| `lib/lost-reason-matrix.ts` | el cruce motivo de perdido × categoría (toma sus columnas de `buildCategoryBreakdown`, no re-normaliza) |
+| `lib/advisor-breakdown.ts` | la matriz asesor × etapa del embudo + el desglose de estatus por asesor |
 
 - **`isWonOpp()`**: some sub-accounts never flip `status` to `"won"` — they record a sale
   by moving the opportunity into a late stage ("09. Negocio Ganado") while `status`
@@ -435,7 +441,29 @@ Both dashboards export a branded PDF via `components/dashboard/export-report-but
   *before* the date filter, so the date-filtered slices and the `all*` lookup sets agree —
   a drill-down must never surface a record the charts excluded. The AI assistant is
   deliberately exempt, same as the date filter.
-- **Filtering is entirely client-side and date-range only**: `lib/date-range.ts` (`DateFilter`, `resolveDateRange`, `filterByDateRange`) filters the already-fetched dataset by date; `components/dashboard/date-range-filter.tsx` is the UI. The filtered slices are computed in `app/page.tsx` and passed to each dashboard as props. The date filter bar is hidden on the AI assistant tab, which always sees the full dataset.
+- **Filtering is entirely client-side**: `lib/date-range.ts` (`DateFilter`, `resolveDateRange`, `filterByDateRange`) filters the already-fetched dataset by date; `components/dashboard/date-range-filter.tsx` is the UI *and* the bar that hosts every other panel-wide filter. The filtered slices are computed in `app/page.tsx` and passed to each dashboard as props. The filter bar is hidden on the AI assistant tab, which always sees the full dataset.
+- **There are three panel-wide filters, and they compose in a fixed order** — all of them
+  live in `app/page.tsx` and all of them are applied to the opportunity set **before** the
+  date cut, so the date-filtered slices and the unfiltered `all*` lookup sets agree. A
+  drill-down must never surface a record the charts excluded:
+  `data.opportunities` → `applyHubspotFilter` → `applyPanelFilters` → `scopedOpportunities`
+  → `filterByDateRange` → `opportunities`.
+  **`lib/panel-filters.ts`** owns the last two: the **Sucursal** and **Asesor** multi-select
+  menus (`multi-select-filter.tsx`, one generic component mounted twice). Notes worth
+  keeping:
+  - **Empty selection = no filter.** Do not "fix" this into an all-selected neutral state:
+    with that convention a branch newly added in the CRM would silently sit outside a
+    filter the user believes is off.
+  - `sucursalOf()` reads **either** `Sucursal VAEO` **or** `Sucursal MESH` — an opportunity
+    only populates its own pipeline's field — which is what lets **one global menu** serve a
+    bar that lives above the tabs. Options are derived from the loaded dataset, plus a
+    `Sin sucursal` bucket so those records stay reachable.
+  - `ADVISORS` is **hardcoded to the three sales advisors the client named** (Zulema Silva,
+    Dariana Turrubiates, Diana Arbelaez); the sub-account's other six users are owner,
+    marketing and support. Matching is by **first name**, accent- and case-insensitive
+    against `opp.assignedTo`, so a corrected surname in GHL doesn't break the filter.
+  - They filter **opportunities only** — contacts carry no sucursal of their own.
+  - The AI assistant is exempt, same as the date filter and the HubSpot toggle.
 - **`calls` is always empty** in live data — GHL doesn't expose a public calls endpoint in the standard API. **`tasks` is populated** via the location-wide `/locations/:id/tasks/search` endpoint (`searchLocationTasks`), fetched concurrently with the other datasets.
 - **Drill-downs resolve joins against the *unfiltered* set.** Dashboards take both
   `opportunities` (date-filtered, for display) and `allOpportunities` (everything, as a
