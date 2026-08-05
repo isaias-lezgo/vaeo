@@ -79,7 +79,7 @@ entre sí por luminosidad.
   `SalesSeriesEntry`, `SalesMonthBucket`, `SalesSeriesData` y la constante `OTROS_KEY`.
   La Task 3 consume todo esto.
 
-- [ ] **Step 1: Exportar las primitivas de mes**
+- [x] **Step 1: Exportar las primitivas de mes**
 
 En `lib/sales-pivot.ts`, cambia las dos funciones privadas a exportadas (solo agrega
 `export`, no toques el cuerpo ni el comentario de arriba):
@@ -92,7 +92,7 @@ export function monthKeyOf(iso: string): string {
 export function monthLabelOf(key: string): string {
 ```
 
-- [ ] **Step 2: Escribir las aserciones que fallan**
+- [x] **Step 2: Escribir las aserciones que fallan**
 
 En `scripts/verify-sales-pivot.ts`, agrega el import (junto a los que ya están):
 
@@ -228,12 +228,12 @@ y este bloque **dentro de `main()`**, al final, antes del `console.log` de cierr
   }
 ```
 
-- [ ] **Step 3: Correr y ver que falla**
+- [x] **Step 3: Correr y ver que falla**
 
 Run: `pnpm verify:pivot`
 Expected: FAIL — `Cannot find module '../lib/sales-series'`.
 
-- [ ] **Step 4: Escribir el módulo**
+- [x] **Step 4: Escribir el módulo**
 
 Crear `lib/sales-series.ts`:
 
@@ -426,17 +426,17 @@ export function buildSalesSeries(
 }
 ```
 
-- [ ] **Step 5: Correr y ver que pasa**
+- [x] **Step 5: Correr y ver que pasa**
 
 Run: `pnpm verify:pivot`
 Expected: PASS — todas las aserciones, incluidas las 9 que ya existían.
 
-- [ ] **Step 6: Chequear tipos**
+- [x] **Step 6: Chequear tipos**
 
 Run: `npx tsc --noEmit`
 Expected: sin salida.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add lib/sales-series.ts lib/sales-pivot.ts scripts/verify-sales-pivot.ts
@@ -459,7 +459,7 @@ mes en UTC) y verify:pivot asegura que los dos dan el mismo número."
 - Produces: `SERIES_PALETTE` (`{ light: string[]; dark: string[] }`),
   `SERIES_NEUTRALS` (`{ otros: {light,dark}; empty: {light,dark} }`). La Task 3 los consume.
 
-- [ ] **Step 1: Agregar las constantes**
+- [x] **Step 1: Agregar las constantes**
 
 En `components/dashboard/dashboard-ui.tsx`, justo después de `chartPaletteColor`:
 
@@ -495,12 +495,12 @@ export const SERIES_NEUTRALS = {
 } as const
 ```
 
-- [ ] **Step 2: Chequear tipos**
+- [x] **Step 2: Chequear tipos**
 
 Run: `npx tsc --noEmit`
 Expected: sin salida.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/dashboard/dashboard-ui.tsx
@@ -535,7 +535,7 @@ con --pairs all. Cinco tonos es el límite duro."
   leer el tema en JS.
 - El `stroke` del color de la tarjeta es el separador de 2px entre segmentos apilados.
 
-- [ ] **Step 1: Escribir el componente**
+- [x] **Step 1: Escribir el componente**
 
 ```tsx
 "use client"
@@ -896,14 +896,14 @@ export function SalesByDimensionChart({
 }
 ```
 
-- [ ] **Step 2: Chequear tipos**
+- [x] **Step 2: Chequear tipos**
 
 Run: `npx tsc --noEmit`
 Expected: sin salida. Si Recharts se queja de la firma de `onClick` o de
 `LabelList.formatter`, ajusta el tipo del parámetro — no cambies el comportamiento y no
 uses `@ts-ignore`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/dashboard/sales-by-dimension-chart.tsx
@@ -925,7 +925,7 @@ por entidad, leyenda que aísla, barra atenuada para las ventas sin fecha."
 - Consumes: `SalesByDimensionChart` (Task 3) y `SalesPivotTable` (ya existe).
 - Produces: nada que consuman tareas posteriores.
 
-- [ ] **Step 1: VAEO — importar y montar**
+- [x] **Step 1: VAEO — importar y montar**
 
 En `components/dashboard/vaeo-dashboard.tsx`, agrega el import junto al de `SalesPivotTable`:
 
@@ -961,7 +961,7 @@ y reemplaza el cuerpo del `return` (deja el `DashboardShell`) por:
   )
 ```
 
-- [ ] **Step 2: MESH — mismo montaje, quitando el placeholder**
+- [x] **Step 2: MESH — mismo montaje, quitando el placeholder**
 
 En `components/dashboard/mesh-dashboard.tsx`, cambia el import de `dashboard-ui` para que
 ya no traiga `PanelPlaceholder`, agrega los dos componentes, y ajusta la destructuración
@@ -1013,14 +1013,14 @@ export function MeshDashboard({
 }
 ```
 
-- [ ] **Step 3: Chequear tipos**
+- [x] **Step 3: Chequear tipos**
 
 Run: `npx tsc --noEmit`
 Expected: sin salida. Si TypeScript marca props sin usar en `MeshDashboardProps`
 (`opportunities`, `pautas`, …), déjalas en la interfaz — el contrato de props se mantiene
 idéntico entre los dos paneles a propósito.
 
-- [ ] **Step 4: Verificar en la app real**
+- [x] **Step 4: Verificar en la app real**
 
 Los charts no se verifican sin verlos. Corre `pnpm dev`, entra con la contraseña del
 cliente y revisa, en las pestañas VAEO y MESH:
@@ -1037,7 +1037,7 @@ cliente y revisa, en las pestañas VAEO y MESH:
 Cualquier discrepancia entre el total del chart y el de la tabla es un bug de bloqueo:
 para y arréglalo antes de commitear.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/dashboard/vaeo-dashboard.tsx components/dashboard/mesh-dashboard.tsx
@@ -1058,7 +1058,7 @@ su propio pipeline y su propio campo de sucursal."
 **Interfaces:**
 - Consumes: nada. Cierra el trabajo.
 
-- [ ] **Step 1: Quitar la regla de leyendas**
+- [x] **Step 1: Quitar la regla de leyendas**
 
 En `CLAUDE.md`, dentro de **Chart conventions**, borra la línea:
 
@@ -1069,7 +1069,7 @@ En `CLAUDE.md`, dentro de **Chart conventions**, borra la línea:
 La regla se elimina por decisión del dueño del repo: una barra apilada requiere leyenda por
 definición, y estos charts calcan un reporte que el cliente ya usa.
 
-- [ ] **Step 2: Registrar el módulo nuevo**
+- [x] **Step 2: Registrar el módulo nuevo**
 
 En la tabla de **Shared domain rules (single sources of truth)**, agrega una fila después
 de la de `lib/sales-pivot.ts`:
@@ -1078,7 +1078,7 @@ de la de `lib/sales-pivot.ts`:
 | `lib/sales-series.ts` | la agregación de las barras apiladas (mes de cierre × sucursal / servicio) |
 ```
 
-- [ ] **Step 3: Actualizar "Current state"**
+- [x] **Step 3: Actualizar "Current state"**
 
 Reemplaza la primera viñeta de **Current state** por:
 
@@ -1102,12 +1102,12 @@ Y en la sección de **Chart conventions**, agrega:
   filtro de fechas no repinte las series.
 ```
 
-- [ ] **Step 4: Verificar que el verify sigue verde**
+- [x] **Step 4: Verificar que el verify sigue verde**
 
 Run: `pnpm verify:pivot && npx tsc --noEmit`
 Expected: PASS y sin salida.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CLAUDE.md
