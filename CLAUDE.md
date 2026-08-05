@@ -61,6 +61,7 @@ pnpm verify:limiter      # lib/ghl-limiter.ts — per-location isolation
 pnpm verify:attachments  # lib/attachments.ts + lib/attachment-tools.ts — tabular parse/query/join
 pnpm verify:paged        # lib/paged-fetch.ts — resiliencia del abanico de páginas
 pnpm verify:pivot        # lib/sales-pivot.ts + lib/panel-scope.ts + lib/hubspot-import.ts
+pnpm verify:breakdown    # lib/opportunity-breakdown.ts — cubetas de estado + normalización de categorías
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
@@ -70,7 +71,7 @@ gate.
 
 **No test framework, and not adopting one.** Instead, the pure modules where a silent
 bug would be a *cross-tenant data leak* (clients / auth / limiter) or a silently wrong
-answer (attachments / paged-fetch / sales-pivot) have assertion scripts under
+answer (attachments / paged-fetch / sales-pivot / opportunity-breakdown) have assertion scripts under
 `scripts/verify-*.ts` (plain `node:assert/strict`, run via `tsx`). Run them after touching
 auth, the roster, the limiter, the attachment parsers, the pagination helpers, or the
 sales pivot. Everything else is verified by driving the real app.
@@ -177,7 +178,8 @@ that differs between the two lines as well. `resolvePipelineId()` matches the pi
 
 ### Current state
 
-- `components/dashboard/vaeo-dashboard.tsx` renders its first chart, `sales-pivot-table.tsx` ("Resumen general de ventas"). `components/dashboard/mesh-dashboard.tsx` is still **deliberately empty** and renders only `PanelPlaceholder` — the old Marketing/Ventas charts were deleted wholesale so the two business-line panels could be rebuilt from scratch. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above).
+- Both panels now render charts; `PanelPlaceholder` is no longer used by either. **Shared by both** (identical code, only `panel` differs): `opportunity-status-chart.tsx`, `opportunity-win-rate-chart.tsx`, and two mounts of `category-breakdown-chart.tsx` (`OrigenDeLeadChart` / `CanalDeContactoChart`, both exported from that file with their tooltip copy), and two mounts of `sales-by-dimension-chart.tsx` (ventas apiladas por mes de cierre, cortadas por sucursal y por servicio — calcan los dos charts de Looker Studio que el cliente ya usa). **VAEO only**: `sales-pivot-table.tsx` ("Resumen general de ventas") — nobody has asked for it in MESH; sus totales y los de las barras salen del mismo agregado y `pnpm verify:pivot` asegura que cuadran. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above). Each panel builds one `shared` object and spreads it into every per-opportunity chart; keep that pattern rather than re-listing props per chart.
+- **`ChartContainer` (`components/ui/chart.tsx`) already wraps its child in a Recharts `ResponsiveContainer`.** Do not nest another one inside it — the chart still renders, but Recharts logs "width and height are both fixed numbers" on every resize. Charts recovered from git history predate this and do nest one; drop it when you port them.
 - Both panels also take **`dateRange`** (the resolved `ResolvedDateRange | null` from `app/page.tsx`). It exists for charts that measure a date *other than* `createdAt`: the pivot table filters `allOpportunities` by **Fecha de Cierre** itself, because the pre-filtered `opportunities` prop is cut by creation date and would silently drop an opportunity created outside the window but closed inside it.
 - Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
 - The third tab (`DashboardTab` id `"conversations"`, labelled **"Asistente IA"**) renders `conversations-chat.tsx`. It is **permanently mounted and merely hidden** when inactive, so the chat history survives tab switches — do not make it conditional. It always sees the full, unfiltered dataset.
@@ -364,6 +366,8 @@ bug class these modules were extracted to kill.
 | `lib/panel-scope.ts` | which pipeline + sucursal custom field each panel means |
 | `lib/hubspot-import.ts` | which opportunities arrived already-closed from the HubSpot migration |
 | `lib/sales-pivot.ts` | the ventas pivot aggregation (mes de cierre × sucursal › servicio) |
+| `lib/sales-series.ts` | la agregación de las barras apiladas (mes de cierre × sucursal / servicio) |
+| `lib/opportunity-breakdown.ts` | won/open/lost bucketing per month + "Origen de Lead" / "Canal de Contacto" category rollups |
 
 - **`isWonOpp()`**: some sub-accounts never flip `status` to `"won"` — they record a sale
   by moving the opportunity into a late stage ("09. Negocio Ganado") while `status`
@@ -494,6 +498,16 @@ An HTTP MCP server (`ghl-mcp`, configured in `.mcp.json`) connects directly to G
 **Chart conventions** — apply to every new chart:
 - Use `NonZeroTooltipContent` so empty series don't render noise, and wire a drill-down
   drawer (`chart-drill-drawer.tsx`) — every chart should be clickable through to its records
-- No visual encoding that requires a legend to decode
+- Series apiladas: usa `SERIES_PALETTE` / `SERIES_NEUTRALS` (`dashboard-ui.tsx`), no
+  `CHART_PALETTE` — esta última no pasa la validación de contraste/CVD en un stack. Cinco
+  tonos es el límite; una dimensión con más valores pliega su cola en "Otros"
+  (`lib/sales-series.ts`). El color se asigna sobre el set SIN filtrar, para que mover el
+  filtro de fechas no repinte las series.
+- Una leyenda propia (fuera del `ChartContainer`) **no ve** las variables `--color-<slot>`
+  que emite `ChartStyle`: van bajo el selector `[data-chart=chart-<id>]`. Pásale un `id`
+  al `ChartContainer` y marca el bloque de chips con el mismo `data-chart` —
+  `sales-by-dimension-chart.tsx` es el ejemplo. (La vieja regla "ningún encoding que
+  requiera leyenda" se eliminó: una barra apilada la requiere por definición, y estos
+  charts calcan un reporte que el cliente ya usa.)
 - Never nest a scroll container inside a card. For narrow scrollable panels use a plain
   `overflow-y-auto` div — Radix `ScrollArea` breaks `truncate`
