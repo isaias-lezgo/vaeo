@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
+import { MISSING_TEXT } from "./dashboard-ui"
 
 export interface MultiSelectOption {
   /** Valor guardado en el estado. */
@@ -16,8 +17,9 @@ export interface MultiSelectOption {
   /** Cuántos registros trae — se pinta a la derecha de la fila. */
   count?: number
   /**
-   * Cubetas que no son una categoría real ("Sin sucursal"): van al final y en
-   * gris, para que no compitan con una sucursal de verdad.
+   * Cubetas que no son una categoría real ("Sin sucursal", "Sin dato"): van al
+   * final y en el rojizo de dato faltante, para que no compitan con una
+   * sucursal de verdad y se lean como el hueco de captura que son.
    */
   muted?: boolean
   /**
@@ -152,7 +154,7 @@ export function MultiSelectFilter({
                       key={option.value}
                       className={cn(
                         "flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-muted/60",
-                        option.muted && "text-muted-foreground"
+                        option.muted && MISSING_TEXT
                       )}
                     >
                       <Checkbox

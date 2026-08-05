@@ -15,6 +15,8 @@ import { isWonOpp } from "@/lib/opportunity-status"
 import { pautaContactName, pautaContactPhone } from "@/lib/pauta"
 import { buildDrillExport } from "@/lib/drill-export"
 import { triggerDownload } from "@/lib/download"
+import { cn } from "@/lib/utils"
+import { MISSING_TEXT } from "./dashboard-ui"
 import { DollarSign, User, Tag, ChevronRight, TrendingUp, Phone, Mail, Download } from "lucide-react"
 
 const STAGE_CLASSES: Record<string, string> = {
@@ -293,7 +295,12 @@ function ContactList({
             </div>
 
             {/* Email */}
-            <p className="text-xs text-muted-foreground mb-2.5 truncate pl-5">
+            <p
+              className={cn(
+                "text-xs mb-2.5 truncate pl-5",
+                c.email || c.phone ? "text-muted-foreground" : MISSING_TEXT
+              )}
+            >
               {c.email || c.phone || "Sin datos de contacto"}
             </p>
 
@@ -428,7 +435,12 @@ function PautaList({
             </div>
 
             {/* Email */}
-            <p className="text-xs text-muted-foreground mb-2.5 truncate pl-5">
+            <p
+              className={cn(
+                "text-xs mb-2.5 truncate pl-5",
+                contact.email || contact.phone ? "text-muted-foreground" : MISSING_TEXT
+              )}
+            >
               {contact.email || contact.phone || "Sin datos de contacto"}
             </p>
 

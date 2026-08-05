@@ -3,6 +3,7 @@
 import type { ComponentProps, ReactNode } from "react"
 import type { LucideIcon } from "lucide-react"
 import { AlertTriangle, Facebook, Instagram, Globe, Info, Target, Megaphone, Layers3 } from "lucide-react"
+import { Text, type TextProps } from "recharts"
 import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartTooltipContent } from "@/components/ui/chart"
@@ -78,6 +79,63 @@ export const SERIES_NEUTRALS = {
   otros: { light: "#4b5563", dark: "#9ca3af" },
   empty: { light: "#9ca3af", dark: "#4b5563" },
 } as const
+
+/**
+ * Cubetas centinela — "Sin fecha", "Sin sucursal", "Sin servicio", "Sin dato",
+ * "Sin asesor", "Sin motivo". No son una categoría del negocio: son un hueco de
+ * captura en GHL, y por eso se rotulan en un **rojizo leve** en vez del gris de
+ * antes. Un gris las hacía leer como "otra fila más"; el tinte las señala como
+ * algo que el cliente tiene que corregir en el CRM.
+ *
+ * Es deliberadamente MÁS suave que `--destructive` (#DC2626, reservado a
+ * acciones irreversibles) y no es el rojo semántico de "perdida" de los charts:
+ * tiñe SOLO la etiqueta. El encoding de magnitud —barra, sombreado, segmento
+ * apilado— sigue en gris, porque el color ahí codifica datos y meterle rojo
+ * rompería la validación de la paleta (ver SERIES_NEUTRALS).
+ *
+ * Un estado vacío ("Sin oportunidades en el periodo") NO usa esto: no es un dato
+ * faltante, es un resultado legítimamente vacío.
+ */
+export const MISSING_TEXT = "text-missing"
+/** Para un `fill`/`stroke` de SVG fuera de un ChartContainer. Dentro de uno,
+ *  usa la clase `!fill-missing` — ver MissingAwareTick. */
+export const MISSING_COLOR = "hsl(var(--missing))"
+
+/**
+ * Detección por texto, para los ejes de Recharts: el tick llega como string
+ * suelto, sin la bandera del bucket que sí tienen las filas de las tablas.
+ * Donde hay bandera (`row.missing`, `col.kind === "no-date"`, …) se usa esa.
+ */
+export function isMissingLabel(label: string): boolean {
+  return /^sin\s/i.test(label.trim())
+}
+
+type AxisTickProps = TextProps & { payload?: { value?: string | number } }
+
+/**
+ * Tick de eje que tiñe de rojizo la etiqueta de una cubeta centinela y deja el
+ * resto en el gris de CHART_TICK. Usa el `Text` de Recharts —el mismo que monta
+ * el eje por dentro— para no recalcular a mano la geometría del tick.
+ */
+export function MissingAwareTick({ payload, ...props }: AxisTickProps) {
+  const value = String(payload?.value ?? "")
+  return (
+    <Text
+      {...props}
+      // `!fill-missing` y no el atributo `fill`: ChartContainer trae un
+      // `[&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground`, y una
+      // regla CSS —por floja que sea— siempre le gana a un atributo de
+      // presentación. Sin el `!` el tick se queda gris.
+      className={cn(
+        "recharts-cartesian-axis-tick-value",
+        isMissingLabel(value) && "!fill-missing"
+      )}
+      fontSize={CHART_TICK.fontSize}
+    >
+      {value}
+    </Text>
+  )
+}
 
 // Brand icon for a canonical platform label. lucide ships Facebook/Instagram
 // but not TikTok/WhatsApp/Google, so those use inline brand SVGs. "Otro" and any
