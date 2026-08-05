@@ -19,7 +19,7 @@
 - **Nunca un `ScrollArea` de Radix para listas con `truncate`** — lo rompe. Se usa un `div` con `overflow-y-auto`.
 - **Los comentarios de estos archivos van en español**, en el tono de los módulos vecinos (`lib/panel-filters.ts`, `lib/opportunity-breakdown.ts`): explican *por qué*, no *qué*.
 - **Punto de aplicación invariable:** los filtros se aplican en `app/page.tsx` sobre el set de oportunidades **antes** del corte por fecha, para que las slices filtradas y los sets `all*` de los drill-downs vean el mismo universo.
-- **La base de partida está en staging sin commitear** (los filtros de sucursal y asesor). Al empezar, `npx tsc --noEmit` sale limpio y `pnpm verify:filters` / `pnpm verify:breakdown` pasan. Si no es así, para y avisa antes de tocar nada.
+- **La base de partida son los filtros de sucursal y asesor**, ya commiteados (`0f746b8`, `225c215`). Al empezar, `npx tsc --noEmit` sale limpio y `pnpm verify:filters` / `pnpm verify:breakdown` pasan. Si no es así, para y avisa antes de tocar nada.
 
 ## File Structure
 
