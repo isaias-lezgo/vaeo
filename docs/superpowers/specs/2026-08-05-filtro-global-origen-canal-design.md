@@ -25,35 +25,56 @@ dos filtros globales.
 ## Semántica
 
 - Dentro de una dimensión, los valores marcados se unen con **OR**. Entre las dos
-  dimensiones se cruzan con **AND**: `{origen: [meta, google ads], canal:
-  [whatsapp]}` = "oportunidades de Meta o Google ADs que llegaron por WhatsApp".
+  dimensiones se cruzan con **AND**: `{origen: ["Meta", "Google ADs"], canal:
+  ["WhatsApp"]}` = "oportunidades de Meta o Google ADs que llegaron por WhatsApp".
 - Una selección vacía en una dimensión significa **que esa dimensión no filtra**,
   no "ninguno".
 - Una celda con dos valores (`"Meta, Sitio Web"`) **coincide si cualquiera** de sus
   valores está marcado. Es la misma regla de "cuenta en cada categoría que nombra"
   que ya aplica `buildCategoryBreakdown`; el registro genuinamente tiene los dos
   orígenes.
-- **"Sin dato" es un valor seleccionable**, con clave propia (`NO_VALUE_KEY`). Es
-  la fila de fuga de atribución, y poder aislarla es medio motivo del filtro.
+- **"Sin dato" es un valor seleccionable**, con una clave centinela propia
+  (`NO_VALUE_KEY`). Es la fila de fuga de atribución, y poder aislarla es medio
+  motivo del filtro.
 
-## La selección se guarda por clave normalizada, no por etiqueta
+## El menú lista la grafía cruda, sin agrupar
 
-`buildCategoryBreakdown` ya colapsa `Walk-in` / `Walk In` y `Inmobiliaria` /
-`Inmobiliario` en un solo grupo, vía `categoryKey()` más el mapa privado
-`KEY_ALIASES`. Si el filtro comparara por etiqueta, o re-normalizara por su cuenta,
-las dos definiciones podrían separarse y el menú diría un número distinto del que
-dibuja el chart — exactamente la clase de bug por la que existen los módulos
-compartidos de `lib/`.
+Esta es la decisión que separa al filtro de los charts, y es deliberada.
 
-Por eso:
+`buildCategoryBreakdown` colapsa `Walk In` / `WALK IN` / `walk-in` en un solo grupo
+(vía `categoryKey()` y el mapa `KEY_ALIASES`) y lo dibuja con la grafía oficial del
+picklist. Eso es correcto para un ranking, pero borra justo la señal que el dueño
+del CRM necesita: **una grafía repetida es un error de captura que hay que corregir
+en GHL**, y no puede corregir lo que no ve.
 
-1. Se extrae ese par (`categoryKey` + `KEY_ALIASES`) a un
-   **`normalizeCategoryKey(raw)`** exportado desde `lib/opportunity-breakdown.ts`,
-   y `buildCategoryBreakdown` pasa a usarlo también.
-2. **`CategoryRow` gana un campo `key`**, con `NO_VALUE_KEY` en la fila "Sin dato".
+Así que el menú del filtro **no agrupa nada**. Lista cada grafía distinta tal como
+está capturada —`Walk In 31`, `WALK IN 2`, `walk-in 1`— y la selección se guarda con
+esa cadena verbatim. Lo mismo aplica a los alias mapeados a mano: `Inmobiliaria` e
+`Inmobiliario` aparecen como dos opciones, y `Correo InfoVAEO` y `Correo Info VAEO`
+también.
 
-Con eso, las opciones del menú son literalmente las filas del chart: misma
-etiqueta, mismo conteo, misma agrupación.
+Lo único que se colapsa es el espacio en blanco de los extremos, que ya recorta
+`categoryValuesOf`: `"Walk In"` y `"Walk In "` son la misma opción, porque esa
+diferencia es invisible en pantalla y mostrarla como dos filas idénticas parecería
+un bug del panel, no del dato.
+
+**La normalización sí se usa, pero solo para ORDENAR y para marcar variantes** (ver
+"Orden del menú" abajo). Nunca para fusionar opciones.
+
+Y como se usa, tiene que ser **la misma** que la de los charts, no una copia: si el
+filtro reimplementara el agrupamiento, `Inmobiliaria` e `Inmobiliario` podrían dejar
+de quedar adyacentes en el menú el día que alguien toque un alias. Así que
+`lib/opportunity-breakdown.ts` recibe dos cambios pequeños y aditivos:
+
+1. **`normalizeCategoryKey(raw)` pasa a ser exportado** — es `categoryKey()` más el
+   mapa privado `KEY_ALIASES`, que hoy están aplicados en línea dentro de
+   `buildCategoryBreakdown`. Esa función pasa a usarlo también, así que no hay dos
+   definiciones.
+2. **`CategoryRow` gana un campo `key`** (la clave normalizada del grupo, y
+   `NO_VALUE_KEY` en la fila "Sin dato"). Es lo que permite atar un grupo del menú a
+   la fila que el chart dibuja, que es la aserción central de la verificación.
+
+Ninguno de los dos cambia lo que los charts muestran hoy.
 
 ## Punto de aplicación
 
@@ -94,7 +115,10 @@ export const CATEGORY_DIMENSIONS: Record<
 // origen → { label: "Origen de lead", fields: ORIGEN_FIELDS }
 // canal  → { label: "Canal de contacto", fields: CANAL_FIELDS }
 
-/** Claves normalizadas marcadas por dimensión. Vacío = esa dimensión no filtra. */
+/**
+ * Grafías crudas marcadas por dimensión, verbatim. Vacío = esa dimensión no
+ * filtra. NO_VALUE_KEY representa "Sin dato".
+ */
 export interface CategorySelection {
   origen: string[]
   canal: string[]
@@ -102,14 +126,28 @@ export interface CategorySelection {
 
 export const EMPTY_CATEGORY_SELECTION: CategorySelection
 
+/**
+ * Centinela de "Sin dato": un byte nulo seguido de "sin-dato". Empieza con
+ * un byte nulo para que ningún valor capturado por una persona pueda
+ * colisionar con él.
+ */
+export const NO_VALUE_KEY: string
+
 export interface CategoryOption {
-  key: string
-  label: string
+  /** La grafía cruda, que es a la vez la clave y la etiqueta. */
+  value: string
   count: number
+  /**
+   * Clave de agrupamiento, SOLO para ordenar y para marcar variantes en la UI.
+   * Nunca fusiona opciones.
+   */
+  groupKey: string
+  /** true si otra opción de la lista comparte su groupKey. */
+  hasVariants: boolean
 }
 
-/** Las claves de una oportunidad en esa dimensión; [NO_VALUE_KEY] si no trae nada. */
-export function opportunityCategoryKeys(
+/** Las grafías de una oportunidad en esa dimensión; [NO_VALUE_KEY] si no trae nada. */
+export function opportunityCategoryValues(
   opp: Opportunity,
   dimension: CategoryDimension
 ): string[]
@@ -126,7 +164,7 @@ export function applyCategoryFilter(
 
 export function isEmptySelection(selection: CategorySelection): boolean
 
-/** Opciones del menú: las filas de buildCategoryBreakdown, sin el pct. */
+/** Una opción por grafía distinta, ya ordenada (ver "Orden del menú"). */
 export function buildCategoryOptions(
   opps: Opportunity[],
   dimension: CategoryDimension
@@ -136,16 +174,44 @@ export function buildCategoryOptions(
 `applyCategoryFilter` con una selección vacía devuelve **el mismo arreglo**, no una
 copia: es el estado por defecto y no debe invalidar los `useMemo` río abajo.
 
-`lib/opportunity-breakdown.ts` sigue siendo el dueño de la normalización y de las
-etiquetas; `lib/category-filter.ts` solo añade el mapeo dimensión → campos, la
-forma de la selección y el emparejamiento.
+El emparejamiento es por cadena exacta ya recortada — la misma que produce
+`categoryValuesOf`, así que una oportunidad siempre coincide con la opción que la
+listó.
+
+`lib/opportunity-breakdown.ts` sigue siendo el dueño de la agrupación y de las
+etiquetas oficiales que usan los charts; `lib/category-filter.ts` es su contraparte
+sin agrupar, para el filtro, y le pide prestada la normalización
+(`normalizeCategoryKey`) únicamente para ordenar.
+
+## Orden del menú
+
+No agrupar crea un problema de lectura: si la lista se ordena solo por conteo,
+`Walk In 31` queda arriba y `WALK IN 2` treinta filas abajo, y el error tipográfico
+—que es justo lo que se quiere ver— se vuelve invisible.
+
+Por eso el orden es **jerárquico, en dos niveles**:
+
+1. Los grupos (por `normalizeCategoryKey`, es decir `categoryKey()` más los alias)
+   se ordenan por su conteo **total** descendente.
+2. Dentro de un grupo, las grafías se ordenan por su propio conteo descendente.
+
+Resultado: las categorías grandes siguen arriba, y cada variante queda pegada a su
+hermana canónica. `Walk In 31` / `WALK IN 2` / `walk-in 1` salen en filas
+consecutivas, imposibles de no ver.
+
+Los empates se rompen alfabéticamente (`localeCompare` en `es`) para que el orden
+sea estable entre renders. "Sin dato" siempre va al final, igual que en los charts:
+es una fuga de atribución, no una categoría que compita en el ranking.
+
+Las opciones de un grupo con más de una grafía llevan `hasVariants: true`, que la
+UI usa para marcarlas.
 
 ## UI: `components/dashboard/category-filter-menu.tsx`
 
 Un componente, dos instancias.
 
 **Props:** `dimension`, `options: CategoryOption[]`, `selected: string[]`,
-`onChange(keys: string[])`.
+`onChange(values: string[])`.
 
 **Trigger.** Misma altura y tipografía que el resto de la barra (`h-7`,
 `text-[11px]`, `border-border/50`, `bg-white/60 dark:bg-white/[0.06]`). Inactivo
@@ -154,11 +220,20 @@ lee `Origen de lead ▾`. Activo pasa a `variant="default"` —igual que el bot�
 `Origen: 3 seleccionados` si son varios, más una ✕ que limpia sin abrir el menú
 (`stopPropagation`).
 
-**Contenido.** `Popover` con una lista de `Checkbox`: etiqueta a la izquierda,
-conteo a la derecha en `tabular-nums`. Buscador solo cuando hay más de 10 opciones
-(hoy son ~15 por dimensión). La lista es un **div plano con `overflow-y-auto` y
-`max-h`, no un `ScrollArea` de Radix** — rompe `truncate`, y etiquetas como
-"Referido de Asociado" lo necesitan.
+**Contenido.** `Popover` con una lista de `Checkbox`: la grafía a la izquierda —
+**verbatim, sin re-capitalizar ni normalizar en el render**, o el error volvería a
+esconderse en el último paso— y el conteo a la derecha en `tabular-nums`. Buscador
+siempre visible: al listar cada grafía, las opciones pasan de ~15 a bastantes más
+por dimensión. La lista es un **div plano con `overflow-y-auto` y `max-h`, no un
+`ScrollArea` de Radix** — rompe `truncate`, y etiquetas como "Referido de Asociado"
+lo necesitan. El buscador compara sin acentos ni mayúsculas, para que escribir
+`walk` encuentre las tres variantes.
+
+**Marca de variante.** Las opciones con `hasVariants` se dibujan unidas por una
+regla vertical sutil a la izquierda, y la primera del grupo lleva un ⚠ discreto con
+tooltip: *"3 grafías distintas de este valor — probable error de captura en el
+CRM"*. Es la razón de ser de todo el diseño sin agrupar; conviene que se lea como
+señal, no como decoración.
 
 **Se aplica al instante**, sin botón "Aplicar": todo es cliente y el usuario ve el
 panel reaccionar. El pie solo lleva "Limpiar", deshabilitado si no hay nada
@@ -185,7 +260,7 @@ mostrar un panel vacío con el filtro a la vista.
 
 Dos consecuencias aceptadas explícitamente:
 
-- **Una clave seleccionada que ya no aparece en la lista** (moviste las fechas, o
+- **Una grafía seleccionada que ya no aparece en la lista** (moviste las fechas, o
   cambiaste de pestaña y ese valor no existe en ese pipeline) se dibuja igual,
   fijada al final con conteo 0, para que se pueda desmarcar. Sin eso queda un
   filtro activo invisible que vacía el panel.
@@ -197,9 +272,16 @@ Dos consecuencias aceptadas explícitamente:
 
 ## Interacción con los charts existentes
 
-- Los charts `OrigenDeLeadChart` / `CanalDeContactoChart` **sí** obedecen el filtro
-  global, incluso el de su propia dimensión: filtrar Origen = Meta deja ese chart
-  con una sola barra. Es honesto y no se le añade lógica de auto-exclusión.
+- Los charts `OrigenDeLeadChart` / `CanalDeContactoChart` **siguen agrupando las
+  grafías** y no cambian: la lista sin agrupar vive solo en el menú del filtro. Un
+  ranking partido en filas de 1–2 registros dejaría de responder "cuánto viene de
+  Walk In", que es para lo que existe.
+- Esos mismos charts **sí** obedecen el filtro global, incluso el de su propia
+  dimensión: filtrar Origen = Meta deja ese chart con una sola barra. Es honesto y
+  no se le añade lógica de auto-exclusión.
+- Marcar una sola grafía (`WALK IN`) y ver que el chart la dibuja bajo la etiqueta
+  oficial del grupo (`Walk In`) es correcto, no una inconsistencia: el menú habla
+  de cómo está capturado el dato y el chart de qué significa.
 - El switch local Canal/Origen de `LostReasonMatrix` es independiente del filtro
   global. El global recorta las oportunidades que la tabla ve; el local decide qué
   dimensión dibuja en las columnas.
@@ -211,21 +293,37 @@ Dos consecuencias aceptadas explícitamente:
 
 `scripts/verify-category-filter.ts`, corrido con `pnpm verify:category-filter`.
 
-La aserción que importa: para **cada fila** que devuelve `buildCategoryBreakdown`
-sobre un set dado, filtrar ese set por la `key` de la fila debe dejar exactamente
-`row.count` oportunidades. Eso ata el conteo que muestra el menú a lo que el panel
-enseña después de aplicar el filtro, que es la única forma de que las dos
-definiciones no se separen con el tiempo.
+La aserción que importa, ahora que el menú no agrupa y los charts sí: **la unión de
+las oportunidades que matchean todas las grafías de un grupo tiene que ser
+exactamente el `oppIds` de la fila que ese grupo dibuja en el chart.** Es decir,
+para cada fila de `buildCategoryBreakdown`, tomar las opciones de
+`buildCategoryOptions` cuyo `groupKey` sea igual al `key` de la fila, filtrar por
+todas ellas y comparar los ids con el `oppIds` de la fila.
+
+Se compara como **conjunto de ids, no como suma de conteos**: una celda que repite
+el mismo valor con dos grafías (`"Meta, meta"`) cuenta una vez en el chart —
+`buildCategoryBreakdown` deduplica por clave— pero aparece en las dos opciones del
+menú, así que la suma daría 2 y el conjunto da 1. La suma sería una aserción que
+falla por una razón que no es un bug.
+
+Esa aserción es la que garantiza que el menú, aunque muestre el dato partido, no
+inventa ni pierde registros respecto de lo que el panel dibuja.
 
 Más aserciones:
 
 - OR dentro de una dimensión; AND entre las dos.
 - Selección vacía = identidad (mismo arreglo, no una copia).
 - Celda multi-valor (`"Meta, Sitio Web"`) coincide por cualquiera de sus valores.
-- Normalización: `Walk-in` y `Walk In` caen en la misma clave; `Inmobiliaria`
-  coincide con la selección `inmobiliario` vía alias.
-- "Sin dato" selecciona exactamente las oportunidades sin valor en esa dimensión.
-- `buildCategoryOptions` no devuelve claves duplicadas y deja "Sin dato" al final.
+- **No se agrupa:** `Walk In` y `WALK IN` son dos opciones distintas con sus propios
+  conteos, y marcar una NO trae las oportunidades de la otra. Lo mismo con
+  `Inmobiliaria` / `Inmobiliario`, que hoy están unidas por `KEY_ALIASES`.
+- **Sí se recorta el espacio:** `"Walk In "` y `"Walk In"` son una sola opción.
+- Orden: las grafías de un mismo grupo salen consecutivas, los grupos ordenados por
+  su total descendente, y "Sin dato" al final.
+- `hasVariants` es true exactamente para las opciones cuyo `groupKey` comparten con
+  otra.
+- "Sin dato" selecciona exactamente las oportunidades sin valor en esa dimensión, y
+  su centinela no colisiona con ninguna grafía capturable.
 
 Recordatorio del repo: este paquete es CommonJS, así que el script envuelve su
 trabajo en un `main()` con `main().catch(...)` — el top-level `await` falla bajo
@@ -238,10 +336,15 @@ registro fuera del filtro.
 
 ## Cambios en la documentación
 
-- `CLAUDE.md`: `lib/category-filter.ts` entra en la tabla de "Shared domain rules";
+- `pnpm verify:breakdown` se vuelve a correr: `buildCategoryBreakdown` cambia por
+  dentro (usa `normalizeCategoryKey` y emite `key`), aunque su salida visible no.
+- `CLAUDE.md`: `lib/category-filter.ts` entra en la tabla de "Shared domain rules",
+  anotado como **la contraparte sin agrupar** de `lib/opportunity-breakdown.ts` —
+  para que nadie "arregle" la duplicación fusionando los dos módulos;
   `pnpm verify:category-filter` en la lista de scripts de verificación; y una
   entrada en "Key design decisions" describiéndolo como el tercer filtro global,
-  aplicado en el mismo costurón que el de HubSpot y exento en el Asistente IA.
+  aplicado en el mismo costurón que el de HubSpot y exento en el Asistente IA, con
+  la razón de que el menú muestre las grafías sin agrupar.
 
 ## Fuera de alcance
 
@@ -250,3 +353,7 @@ registro fuera del filtro.
   mismo componente).
 - Persistir la selección en la URL o en `localStorage`.
 - Aplicar el filtro al Asistente IA.
+- Cambiar cómo agrupan los charts de Origen/Canal o las columnas de la matriz de
+  motivos de perdido. La visibilidad de las grafías vive en el menú del filtro.
+- Corregir las grafías en GHL, o proponer correcciones desde el panel. El menú
+  señala el problema; arreglarlo es trabajo en el CRM.
