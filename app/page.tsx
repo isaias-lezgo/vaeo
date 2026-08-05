@@ -12,7 +12,15 @@ import { HubspotImportToggle } from "@/components/dashboard/hubspot-import-toggl
 import {
   ActiveFiltersPill,
   MultiSelectFilter,
+  type MultiSelectOption,
 } from "@/components/dashboard/multi-select-filter"
+import {
+  buildCategoryOptions,
+  withPinnedSelection,
+  type CategoryOption,
+} from "@/lib/category-filter"
+import { NO_VALUE_KEY, NO_VALUE_LABEL } from "@/lib/opportunity-breakdown"
+import { scopeOpportunities } from "@/lib/panel-scope"
 import {
   activeFilterCount,
   ADVISORS,
@@ -35,6 +43,8 @@ import { useConversationsData } from "@/hooks/use-conversations-data"
 import {
   Building2,
   MapPin,
+  Megaphone,
+  MessageSquare,
   UserRound,
   Network,
   RefreshCw,
@@ -61,6 +71,26 @@ const TAB_TITLES: Record<DashboardTab, string> = {
   vaeo: "VAEO - Lezgo Suite CRM",
   mesh: "MESH - Lezgo Suite CRM",
   conversations: "Asistente IA - Lezgo Suite CRM",
+}
+
+/**
+ * De opción de categoría a fila del menú. El aviso de variante es lo único que
+ * se compone aquí: el módulo cuenta las grafías, la UI decide cómo se lee.
+ */
+function toMenuOptions(
+  options: CategoryOption[],
+  selected: string[]
+): MultiSelectOption[] {
+  return withPinnedSelection(options, selected).map((o) => ({
+    value: o.value,
+    label: o.label,
+    count: o.count,
+    muted: o.muted,
+    variantHint:
+      o.variantCount > 1
+        ? `${o.variantCount} grafías distintas de este valor — probable error de captura en el CRM`
+        : undefined,
+  }))
 }
 
 export default function DashboardPage() {
@@ -141,19 +171,59 @@ export default function DashboardPage() {
     }))
   }, [hubspotScoped])
 
+  // Las opciones de origen y canal se acotan al pipeline de la pestaña activa y
+  // al rango de fechas —así los conteos hablan de lo que el panel está
+  // mostrando— pero NO a los filtros de panel: si se calcularan sobre el set ya
+  // filtrado, marcar "Meta" borraría del menú todo lo demás.
+  //
+  // Es una regla distinta de la de sucursal y asesor, que se calculan sobre el
+  // set completo. Está documentado en el spec como divergencia conocida.
+  const categoryBase = useMemo(() => {
+    if (activeTab === "conversations") return []
+    const scoped = scopeOpportunities(hubspotScoped, activeTab, data?.pipelines ?? [])
+    return filterByDateRange(scoped, (o) => o.createdAt, dateRange)
+  }, [hubspotScoped, activeTab, data?.pipelines, dateRange])
+
+  const origenOptions = useMemo(
+    () => toMenuOptions(buildCategoryOptions(categoryBase, "origen"), panelFilters.origen),
+    [categoryBase, panelFilters.origen]
+  )
+  const canalOptions = useMemo(
+    () => toMenuOptions(buildCategoryOptions(categoryBase, "canal"), panelFilters.canal),
+    [categoryBase, panelFilters.canal]
+  )
+
   // Human label of the active date filter, for the PDF report cover.
   const periodLabel = useMemo(() => {
-    switch (dateFilter.preset) {
-      case "week": return "Últimos 7 días"
-      case "month": return "Últimos 30 días"
-      case "3m": return "Últimos 3 meses"
-      case "6m": return "Últimos 6 meses"
-      case "custom":
-        if (!dateRange) return "Todo el historial"
-        return `${format(dateRange.from, "d MMM yyyy", { locale: es })} – ${format(dateRange.to, "d MMM yyyy", { locale: es })}`
-      default: return "Todo el historial"
+    const base = (() => {
+      switch (dateFilter.preset) {
+        case "week": return "Últimos 7 días"
+        case "month": return "Últimos 30 días"
+        case "3m": return "Últimos 3 meses"
+        case "6m": return "Últimos 6 meses"
+        case "custom":
+          if (!dateRange) return "Todo el historial"
+          return `${format(dateRange.from, "d MMM yyyy", { locale: es })} – ${format(dateRange.to, "d MMM yyyy", { locale: es })}`
+        default: return "Todo el historial"
+      }
+    })()
+
+    // El alcance del reporte incluye los filtros de la barra, no solo la fecha:
+    // una portada que calla que el panel está recortado es una portada que miente.
+    const list = (values: string[]) =>
+      values.map((v) => (v === NO_VALUE_KEY ? NO_VALUE_LABEL : v)).join(", ")
+    const parts = [base]
+    if (panelFilters.sucursales.length) parts.push(`Sucursal: ${list(panelFilters.sucursales)}`)
+    if (panelFilters.asesores.length) {
+      const names = panelFilters.asesores.map(
+        (k) => ADVISORS.find((a) => a.key === k)?.label ?? k
+      )
+      parts.push(`Asesor: ${names.join(", ")}`)
     }
-  }, [dateFilter.preset, dateRange])
+    if (panelFilters.origen.length) parts.push(`Origen: ${list(panelFilters.origen)}`)
+    if (panelFilters.canal.length) parts.push(`Canal: ${list(panelFilters.canal)}`)
+    return parts.join(" · ")
+  }, [dateFilter.preset, dateRange, panelFilters])
 
   const contacts = useMemo(
     () => filterByDateRange(data?.contacts ?? [], (c) => c.createdAt, dateRange),
@@ -385,6 +455,24 @@ export default function DashboardPage() {
                 options={asesorOptions}
                 selected={panelFilters.asesores}
                 onChange={(asesores) => setPanelFilters((f) => ({ ...f, asesores }))}
+              />
+              <MultiSelectFilter
+                label="Origen de lead"
+                icon={Megaphone}
+                options={origenOptions}
+                selected={panelFilters.origen}
+                onChange={(origen) => setPanelFilters((f) => ({ ...f, origen }))}
+                emptyMessage="Sin valores en este periodo"
+                searchable
+              />
+              <MultiSelectFilter
+                label="Canal de contacto"
+                icon={MessageSquare}
+                options={canalOptions}
+                selected={panelFilters.canal}
+                onChange={(canal) => setPanelFilters((f) => ({ ...f, canal }))}
+                emptyMessage="Sin valores en este periodo"
+                searchable
               />
               <ActiveFiltersPill
                 count={activeFilterCount(panelFilters)}

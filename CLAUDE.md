@@ -65,6 +65,7 @@ pnpm verify:breakdown    # lib/opportunity-breakdown.ts — cubetas de estado + 
 pnpm verify:lost-matrix  # lib/lost-reason-matrix.ts — cruce motivo de perdido × categoría
 pnpm verify:advisors     # lib/advisor-breakdown.ts — matriz asesor × etapa + cubetas de estatus
 pnpm verify:filters      # lib/panel-filters.ts — filtros globales de sucursal y asesor
+pnpm verify:category-filter # lib/category-filter.ts — opciones de origen/canal SIN agrupar grafías
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 
@@ -367,7 +368,8 @@ bug class these modules were extracted to kill.
 | `lib/source-platform.ts` | "Origen de lead" platform bucketing + `PLATFORM_COLORS` / `PLATFORM_ORDER` |
 | `lib/csv.ts` | CSV cell escaping (`csvCell`, `buildCsv`) |
 | `lib/panel-scope.ts` | which pipeline + sucursal custom field each panel means |
-| `lib/panel-filters.ts` | los filtros globales de sucursal y asesor de la barra |
+| `lib/panel-filters.ts` | los cuatro filtros globales de la barra (sucursal, asesor, origen, canal) |
+| `lib/category-filter.ts` | las opciones de los menús de Origen/Canal — la contraparte **sin agrupar** de `opportunity-breakdown.ts`; no los fusiones (ver abajo) |
 | `lib/hubspot-import.ts` | which opportunities arrived already-closed from the HubSpot migration |
 | `lib/sales-pivot.ts` | the ventas pivot aggregation (mes de cierre × sucursal › servicio) |
 | `lib/sales-series.ts` | la agregación de las barras apiladas (mes de cierre × sucursal / servicio) |
@@ -448,9 +450,9 @@ Both dashboards export a branded PDF via `components/dashboard/export-report-but
   drill-down must never surface a record the charts excluded:
   `data.opportunities` → `applyHubspotFilter` → `applyPanelFilters` → `scopedOpportunities`
   → `filterByDateRange` → `opportunities`.
-  **`lib/panel-filters.ts`** owns the last two: the **Sucursal** and **Asesor** multi-select
-  menus (`multi-select-filter.tsx`, one generic component mounted twice). Notes worth
-  keeping:
+  **`lib/panel-filters.ts`** owns four menus: **Sucursal**, **Asesor**, **Origen de lead**
+  y **Canal de contacto** (`multi-select-filter.tsx`, one generic component mounted four
+  times). Notes worth keeping:
   - **Empty selection = no filter.** Do not "fix" this into an all-selected neutral state:
     with that convention a branch newly added in the CRM would silently sit outside a
     filter the user believes is off.
@@ -462,6 +464,16 @@ Both dashboards export a branded PDF via `components/dashboard/export-report-but
     Dariana Turrubiates, Diana Arbelaez); the sub-account's other six users are owner,
     marketing and support. Matching is by **first name**, accent- and case-insensitive
     against `opp.assignedTo`, so a corrected surname in GHL doesn't break the filter.
+  - **Los menús de origen y canal listan cada grafía capturada por separado**, sin agrupar:
+    `Walk In` / `WALK IN` / `walk-in` son tres filas, ordenadas de modo que queden
+    consecutivas y con un ⚠ que las señala. Los charts las SIGUEN agrupando. La asimetría
+    es el punto: una grafía repetida es un error de captura que el cliente tiene que
+    corregir en GHL, y agrupar lo esconde. Por eso `lib/category-filter.ts` y
+    `lib/opportunity-breakdown.ts` normalizan distinto — **no "arregles" esa duplicación
+    fusionando los módulos**; `category-filter` solo le pide prestado
+    `normalizeCategoryKey` para ordenar, nunca para unir dos opciones.
+  - Sus opciones se acotan al pipeline de la pestaña activa y al rango de fechas; las de
+    sucursal y asesor no. Divergencia conocida, documentada en el spec del filtro.
   - They filter **opportunities only** — contacts carry no sucursal of their own.
   - The AI assistant is exempt, same as the date filter and the HubSpot toggle.
 - **`calls` is always empty** in live data — GHL doesn't expose a public calls endpoint in the standard API. **`tasks` is populated** via the location-wide `/locations/:id/tasks/search` endpoint (`searchLocationTasks`), fetched concurrently with the other datasets.
