@@ -20,7 +20,33 @@ recorte del panel completo, no solo como eje de dos gráficos.
 Un filtro global más, al lado de fecha e importación HubSpot, con dos menús
 desplegables independientes: **Origen de lead** y **Canal de contacto**. Aplica a
 los paneles VAEO y MESH. La pestaña Asistente IA queda exenta, igual que los otros
-dos filtros globales.
+filtros globales.
+
+## Se extiende lo que ya existe, no se duplica
+
+El diseño de los filtros de **sucursal y asesor**
+(`2026-08-05-filtros-sucursal-y-asesor-design.md`) ya construyó exactamente esta
+infraestructura, y su propio "Fuera de alcance" anticipa este trabajo: *"Cualquier
+otro corte (servicio, origen de lead, etapa) — el mismo componente los soporta
+cuando se pidan."*
+
+Así que origen y canal **entran como dos menús más del mismo mecanismo**:
+
+| Pieza existente | Qué se hace con ella |
+|---|---|
+| `lib/panel-filters.ts` | `PanelFilters` gana `origen` y `canal`; `applyPanelFilters` y `activeFilterCount` los contemplan |
+| `components/dashboard/multi-select-filter.tsx` | Se reusa. Gana dos props **aditivas y opcionales**: buscador y marca de variante |
+| `components/dashboard/date-range-filter.tsx` | Sin cambios: el slot `filters` ya existe |
+| `app/page.tsx` | Dos montajes más de `MultiSelectFilter`, con sus opciones |
+| `scripts/verify-panel-filters.ts` | Gana el caso de los cuatro menús cruzados con AND |
+
+Un solo objeto de estado y una sola función de aplicación para los cuatro menús: es
+lo que garantiza que se combinen entre sí sin escribir el cruce dos veces.
+
+Lo **específico de categorías** —las grafías crudas, el orden jerárquico, la marca
+de variante— sí vive en un módulo propio, `lib/category-filter.ts`, en vez de
+engordar `panel-filters.ts` con una segunda responsabilidad. `applyPanelFilters`
+delega en él.
 
 ## Semántica
 
@@ -81,12 +107,15 @@ Ninguno de los dos cambia lo que los charts muestran hoy.
 El mismo costurón que el filtro de HubSpot, en `app/page.tsx`: sobre el set de
 oportunidades **antes** del filtro de fechas.
 
+Ese costurón ya existe: `applyPanelFilters` se aplica ahí para sucursal y asesor.
+Origen y canal entran por la misma llamada, sin tocar el pipeline.
+
 ```
 data.opportunities
-  → applyHubspotFilter(…, includeHubspot)
-  → applyCategoryFilter(…, categoryFilter)   ← nuevo
-  → scopedOpportunities                       (= prop allOpportunities)
-  → filterByDateRange(…, createdAt, dateRange) (= prop opportunities)
+  → applyHubspotFilter(…, includeHubspot)        = hubspotScoped
+  → applyPanelFilters(…, panelFilters)           ← ahora con 4 dimensiones
+  → scopedOpportunities                           (= prop allOpportunities)
+  → filterByDateRange(…, createdAt, dateRange)    (= prop opportunities)
 ```
 
 Aplicarlo ahí y no en cada chart tiene dos consecuencias que son el punto:
@@ -116,15 +145,10 @@ export const CATEGORY_DIMENSIONS: Record<
 // canal  → { label: "Canal de contacto", fields: CANAL_FIELDS }
 
 /**
- * Grafías crudas marcadas por dimensión, verbatim. Vacío = esa dimensión no
- * filtra. NO_VALUE_KEY representa "Sin dato".
+ * La selección NO vive aquí: son los campos `origen` y `canal` de PanelFilters,
+ * arreglos de grafías crudas verbatim. Vacío = esa dimensión no filtra.
+ * NO_VALUE_KEY representa "Sin dato".
  */
-export interface CategorySelection {
-  origen: string[]
-  canal: string[]
-}
-
-export const EMPTY_CATEGORY_SELECTION: CategorySelection
 
 /**
  * Centinela de "Sin dato": un byte nulo seguido de "sin-dato". Empieza con
@@ -152,17 +176,15 @@ export function opportunityCategoryValues(
   dimension: CategoryDimension
 ): string[]
 
-export function matchesCategorySelection(
+/**
+ * ¿Esta oportunidad pasa el filtro de una dimensión? `selected` vacío = pasa.
+ * Es lo único que applyPanelFilters necesita llamar.
+ */
+export function matchesCategory(
   opp: Opportunity,
-  selection: CategorySelection
+  dimension: CategoryDimension,
+  selected: string[]
 ): boolean
-
-export function applyCategoryFilter(
-  opps: Opportunity[],
-  selection: CategorySelection
-): Opportunity[]
-
-export function isEmptySelection(selection: CategorySelection): boolean
 
 /** Una opción por grafía distinta, ya ordenada (ver "Orden del menú"). */
 export function buildCategoryOptions(
@@ -171,8 +193,10 @@ export function buildCategoryOptions(
 ): CategoryOption[]
 ```
 
-`applyCategoryFilter` con una selección vacía devuelve **el mismo arreglo**, no una
-copia: es el estado por defecto y no debe invalidar los `useMemo` río abajo.
+No hay `applyCategoryFilter` propio: el recorrido del arreglo lo hace
+`applyPanelFilters`, que ya devuelve **la misma referencia** cuando ningún menú
+tiene selección. Duplicar ahí un segundo `.filter()` costaría una pasada extra y,
+peor, una segunda definición de "sin filtros no se filtra".
 
 El emparejamiento es por cadena exacta ya recortada — la misma que produce
 `categoryValuesOf`, así que una oportunidad siempre coincide con la opción que la
@@ -206,51 +230,59 @@ es una fuga de atribución, no una categoría que compita en el ranking.
 Las opciones de un grupo con más de una grafía llevan `hasVariants: true`, que la
 UI usa para marcarlas.
 
-## UI: `components/dashboard/category-filter-menu.tsx`
+## UI: se reusa `MultiSelectFilter`
 
-Un componente, dos instancias.
+El componente ya hace lo esencial: popover, lista de `Checkbox` con conteo a la
+derecha en `tabular-nums`, `div` plano con `overflow-y-auto` (nada de `ScrollArea`,
+que rompe `truncate`), pie con "Limpiar", trigger que se pinta activo y muestra
+cuántas opciones hay marcadas, y aplicación instantánea sin botón "Aplicar". Los
+dos menús nuevos se montan igual que los de sucursal y asesor, en el mismo slot
+`filters` de la barra, y `ActiveFiltersPill` los cuenta sin cambios.
 
-**Props:** `dimension`, `options: CategoryOption[]`, `selected: string[]`,
-`onChange(values: string[])`.
+Le faltan dos cosas para este caso, y ambas entran como **props opcionales**, de
+modo que los montajes de sucursal y asesor no cambian en absoluto:
 
-**Trigger.** Misma altura y tipografía que el resto de la barra (`h-7`,
-`text-[11px]`, `border-border/50`, `bg-white/60 dark:bg-white/[0.06]`). Inactivo
-lee `Origen de lead ▾`. Activo pasa a `variant="default"` —igual que el botón
-"Personalizado" cuando lo está— y lee el valor si es uno solo (`Origen: Meta`) o
-`Origen: 3 seleccionados` si son varios, más una ✕ que limpia sin abrir el menú
-(`stopPropagation`).
+**1. `searchable?: boolean`.** Al listar cada grafía por separado, las opciones
+pasan de ~15 a bastantes más por dimensión, y la lista deja de ser escaneable. Un
+`Input` arriba de la lista, visible solo con `searchable`, que compara **sin
+acentos ni mayúsculas** para que escribir `walk` encuentre las tres variantes. Se
+activa solo en los menús de origen y canal.
 
-**Contenido.** `Popover` con una lista de `Checkbox`: la grafía a la izquierda —
-**verbatim, sin re-capitalizar ni normalizar en el render**, o el error volvería a
-esconderse en el último paso— y el conteo a la derecha en `tabular-nums`. Buscador
-siempre visible: al listar cada grafía, las opciones pasan de ~15 a bastantes más
-por dimensión. La lista es un **div plano con `overflow-y-auto` y `max-h`, no un
-`ScrollArea` de Radix** — rompe `truncate`, y etiquetas como "Referido de Asociado"
-lo necesitan. El buscador compara sin acentos ni mayúsculas, para que escribir
-`walk` encuentre las tres variantes.
-
-**Marca de variante.** Las opciones con `hasVariants` se dibujan unidas por una
-regla vertical sutil a la izquierda, y la primera del grupo lleva un ⚠ discreto con
-tooltip: *"3 grafías distintas de este valor — probable error de captura en el
+**2. `MultiSelectOption.variantHint?: string`.** El texto del aviso de variante.
+Cuando viene, la fila muestra un ⚠ discreto junto a la grafía con ese texto como
+`title`: *"3 grafías distintas de este valor — probable error de captura en el
 CRM"*. Es la razón de ser de todo el diseño sin agrupar; conviene que se lea como
 señal, no como decoración.
 
-**Se aplica al instante**, sin botón "Aplicar": todo es cliente y el usuario ve el
-panel reaccionar. El pie solo lleva "Limpiar", deshabilitado si no hay nada
-marcado.
+Además, la grafía se pinta **verbatim** — el componente ya lo hace, y hay que
+cuidar no añadirle ninguna capitalización ni normalización en el render, o el error
+volvería a esconderse en el último paso.
 
-**Estado vacío:** "Sin valores en este periodo".
+El `muted` que ya existe se reusa para la fila "Sin dato", igual que hoy con "Sin
+sucursal".
 
-**Ubicación:** los dos menús van en el flujo principal de la barra, después del
-botón "Personalizado". El toggle de HubSpot se queda a la derecha con su `ml-auto`.
+**Ubicación:** los dos menús van después de los de sucursal y asesor, dentro del
+mismo slot. El toggle de HubSpot se queda a la derecha con su `ml-auto`.
+
+**Estado vacío:** "Sin valores en este periodo" vía el `emptyMessage` que el
+componente ya acepta.
 
 ## De dónde salen las opciones
 
 Se calculan en `app/page.tsx` sobre las oportunidades del **panel activo**
-(`scopeOpportunities(…, activeTab, pipelines)`), ya pasadas por el filtro de
-HubSpot y por el rango de fechas, pero **sin aplicar ninguna de las dos selecciones
-de categoría**. Sin esa exclusión, marcar "Meta" borraría del menú todo lo demás y
-el filtro sería un callejón sin salida.
+(`scopeOpportunities(hubspotScoped, activeTab, pipelines)`), ya pasadas por el
+filtro de HubSpot y por el rango de fechas, pero **sin aplicar ninguno de los
+filtros de panel**. Sin esa exclusión, marcar "Meta" borraría del menú todo lo
+demás y el filtro sería un callejón sin salida — es la misma razón por la que los
+menús de sucursal y asesor ya se calculan sobre `hubspotScoped` y no sobre
+`scopedOpportunities`.
+
+**Divergencia conocida con los menús de sucursal y asesor.** Esos dos calculan sus
+opciones sobre el set completo: ni acotado al pipeline de la pestaña, ni cortado
+por fecha. Los de origen y canal sí hacen ambas cosas, porque así se pidió. El
+resultado es que en la misma barra dos menús reaccionan al filtro de fechas y dos
+no. Es un wart real y se documenta en vez de esconderse; alinear los otros dos es
+un cambio de una línea cada uno, pero pertenece a su propio spec, no a este.
 
 Que las opciones salgan del panel activo implica que VAEO y MESH ven listas
 distintas y que la selección **persiste al cambiar de pestaña**, aunque el valor no
@@ -312,7 +344,9 @@ inventa ni pierde registros respecto de lo que el panel dibuja.
 Más aserciones:
 
 - OR dentro de una dimensión; AND entre las dos.
-- Selección vacía = identidad (mismo arreglo, no una copia).
+- **Los cuatro menús cruzan con AND** (sucursal × asesor × origen × canal). Va en
+  `verify-panel-filters.ts`, que es el dueño de esa regla.
+- Selección vacía = identidad (`applyPanelFilters` devuelve el mismo arreglo).
 - Celda multi-valor (`"Meta, Sitio Web"`) coincide por cualquiera de sus valores.
 - **No se agrupa:** `Walk In` y `WALK IN` son dos opciones distintas con sus propios
   conteos, y marcar una NO trae las oportunidades de la otra. Lo mismo con
@@ -341,15 +375,17 @@ registro fuera del filtro.
 - `CLAUDE.md`: `lib/category-filter.ts` entra en la tabla de "Shared domain rules",
   anotado como **la contraparte sin agrupar** de `lib/opportunity-breakdown.ts` —
   para que nadie "arregle" la duplicación fusionando los dos módulos;
-  `pnpm verify:category-filter` en la lista de scripts de verificación; y una
-  entrada en "Key design decisions" describiéndolo como el tercer filtro global,
-  aplicado en el mismo costurón que el de HubSpot y exento en el Asistente IA, con
-  la razón de que el menú muestre las grafías sin agrupar.
+  `pnpm verify:category-filter` en la lista de scripts de verificación; y la
+  entrada de "Key design decisions" de los filtros globales menciona que origen y
+  canal son dos menús más de `PanelFilters`, con la razón de que su menú muestre
+  las grafías sin agrupar.
 
 ## Fuera de alcance
 
 - Filtrar contactos, pautas, citas o tareas.
-- Filtrar por sucursal o por servicio (son otros campos; si se piden, reusan este
+- Alinear los menús de sucursal y asesor con la regla de opciones de estos dos
+  (acotar al panel activo y al rango de fechas). Ver "Divergencia conocida".
+- Filtrar por servicio o por etapa (son otros campos; si se piden, reusan este
   mismo componente).
 - Persistir la selección en la URL o en `localStorage`.
 - Aplicar el filtro al Asistente IA.
