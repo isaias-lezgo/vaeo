@@ -12,16 +12,26 @@
 import type { Opportunity } from "./types"
 import { PANEL_SCOPES } from "./panel-scope"
 import { NO_SUCURSAL } from "./sales-pivot"
+import { matchesCategory } from "./category-filter"
 
-/** Estado de los dos menús. Arreglo vacío = ese menú no filtra nada. */
+/** Estado de los cuatro menús. Arreglo vacío = ese menú no filtra nada. */
 export interface PanelFilters {
   /** Valores de sucursal seleccionados; NO_SUCURSAL alcanza a los que no tienen. */
   sucursales: string[]
   /** Claves de asesor seleccionadas (las de ADVISORS). */
   asesores: string[]
+  /** Grafías crudas de "Origen de Lead"; NO_VALUE_KEY alcanza a los sin dato. */
+  origen: string[]
+  /** Grafías crudas de "Canal de Contacto"; NO_VALUE_KEY alcanza a los sin dato. */
+  canal: string[]
 }
 
-export const EMPTY_PANEL_FILTERS: PanelFilters = { sucursales: [], asesores: [] }
+export const EMPTY_PANEL_FILTERS: PanelFilters = {
+  sucursales: [],
+  asesores: [],
+  origen: [],
+  canal: [],
+}
 
 /**
  * Los tres asesores de ventas que el cliente pidió, y solo esos. La subcuenta
@@ -105,12 +115,17 @@ export function applyPanelFilters(
 ): Opportunity[] {
   const bySucursal = filters.sucursales.length > 0
   const byAsesor = filters.asesores.length > 0
+  const byOrigen = filters.origen.length > 0
+  const byCanal = filters.canal.length > 0
   // Misma referencia cuando no hay nada que filtrar, igual que
   // applyHubspotFilter: una copia nueva invalidaría los memos aguas abajo.
-  if (!bySucursal && !byAsesor) return opps
+  if (!bySucursal && !byAsesor && !byOrigen && !byCanal) return opps
 
   const sucursales = new Set(filters.sucursales)
   const asesores = new Set(filters.asesores)
+  // Los Sets de categoría se arman una vez, no una por oportunidad.
+  const origen = new Set(filters.origen)
+  const canal = new Set(filters.canal)
 
   return opps.filter((o) => {
     if (bySucursal && !sucursales.has(sucursalOf(o))) return false
@@ -118,11 +133,18 @@ export function applyPanelFilters(
       const key = advisorKeyOf(o)
       if (!key || !asesores.has(key)) return false
     }
+    if (byOrigen && !matchesCategory(o, "origen", origen)) return false
+    if (byCanal && !matchesCategory(o, "canal", canal)) return false
     return true
   })
 }
 
-/** Cuántos menús tienen algo puesto — alimenta el aviso de "filtros activos". */
+/** Cuántas opciones hay marcadas en total — alimenta el aviso de "filtros activos". */
 export function activeFilterCount(filters: PanelFilters): number {
-  return filters.sucursales.length + filters.asesores.length
+  return (
+    filters.sucursales.length +
+    filters.asesores.length +
+    filters.origen.length +
+    filters.canal.length
+  )
 }
