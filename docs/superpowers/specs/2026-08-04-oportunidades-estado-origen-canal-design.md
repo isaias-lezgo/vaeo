@@ -3,13 +3,15 @@
 Fecha: 2026-08-04
 Estado: aprobado
 
-Tres gráficos nuevos, idénticos en ambos paneles (VAEO y MESH), portados de un
+Cuatro gráficos nuevos, idénticos en ambos paneles (VAEO y MESH), portados de un
 reporte de Looker Studio que el cliente ya usa:
 
 1. **Oportunidades por estado** — barras apiladas por mes de creación, segmentadas
    en ganada / abierta / perdida.
-2. **Oportunidades por Origen de Lead** — ranking de categorías.
-3. **Oportunidades por Canal de Contacto** — el mismo componente, otro campo.
+2. **Oportunidades creadas y % ganadas** — combinado: barras de creadas por mes y
+   una línea con el porcentaje de esa cohorte que terminó ganada.
+3. **Oportunidades por Origen de Lead** — ranking de categorías.
+4. **Oportunidades por Canal de Contacto** — el mismo componente, otro campo.
 
 ## Lo que dijeron los datos
 
@@ -122,6 +124,30 @@ leyenda compacta. `NonZeroTooltipContent` para que un mes sin ganadas no muestre
 "Ganadas: 0". Clic en un segmento → `ChartDrillDrawer` con esas oportunidades,
 resueltas contra `allOpportunities`. `ScopePill` con la regla completa.
 
+### `components/dashboard/opportunity-win-rate-chart.tsx`
+
+`ComposedChart` de Recharts: barras de oportunidades creadas por mes (eje
+izquierdo) más una línea con el % ganado de esa misma cohorte (eje derecho).
+Consume **las mismas filas de `buildStatusByMonth()`** que el gráfico anterior,
+a propósito: si cada uno contara sus propios meses, algún día dirían cosas
+distintas del mismo mes.
+
+El eje del porcentaje se deja **automático, no fijo a 100%**. La tasa de cierre
+real ronda 2–6%, y con el eje clavado en 100 la línea queda pegada al suelo y la
+tendencia —que es lo único que este gráfico aporta sobre el anterior— se vuelve
+ilegible. El costo es que la altura de la línea no es comparable entre paneles
+con escalas distintas; el `ScopePill` lo dice.
+
+El drill entra por la barra y trae la cohorte completa del mes, no solo las
+ganadas: el punto es qué proporción de ese grupo cerró, y el drawer ya distingue
+el estatus de cada renglón. Los puntos de la línea no son clickeables — la API de
+`activeDot` de Recharts no expone el `payload` en su handler con tipos sanos, y
+no vale un cast para duplicar un drill que la barra ya ofrece.
+
+`ScopePill` advierte lo que Looker no: **los meses recientes todavía tienen
+oportunidades abiertas**, así que su porcentaje solo puede subir y aún no es
+comparable con el de un mes cerrado.
+
 ### `components/dashboard/category-breakdown-chart.tsx`
 
 Un componente reutilizable, montado dos veces (Origen y Canal). Barras
@@ -130,10 +156,14 @@ drawer. Los dos se rinden lado a lado en `grid md:grid-cols-2`.
 
 ### Montaje
 
-Los tres van en **ambos** paneles con el mismo código, cambiando solo el prop
+Los cuatro van en **ambos** paneles con el mismo código, cambiando solo el prop
 `panel`; el alcance de embudo lo aplica `scopeOpportunities()`. `mesh-dashboard.tsx`
-deja de ser `PanelPlaceholder`. Orden: tabla de ventas → barras por estado → la
-pareja origen/canal.
+deja de ser `PanelPlaceholder`. Orden: barras por estado → creadas y % ganadas →
+la pareja origen/canal, con la tabla de ventas arriba de todo en VAEO.
+
+La tabla "Resumen general de ventas" **sigue siendo solo de VAEO**: nadie pidió
+montarla en MESH y es una decisión aparte, así que MESH arranca directo con los
+cuatro gráficos nuevos.
 
 Los gráficos leen el prop `opportunities` (ya filtrado por fecha y por el toggle
 de HubSpot) y resuelven los joins del drawer contra `allOpportunities`.

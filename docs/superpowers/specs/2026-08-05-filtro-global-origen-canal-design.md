@@ -166,8 +166,8 @@ export interface CategoryOption {
    * Nunca fusiona opciones.
    */
   groupKey: string
-  /** true si otra opción de la lista comparte su groupKey. */
-  hasVariants: boolean
+  /** Cuántas grafías tiene su grupo. 1 = no hay error de captura que mostrar. */
+  variantCount: number
 }
 
 /** Las grafías de una oportunidad en esa dimensión; [NO_VALUE_KEY] si no trae nada. */
@@ -183,7 +183,7 @@ export function opportunityCategoryValues(
 export function matchesCategory(
   opp: Opportunity,
   dimension: CategoryDimension,
-  selected: string[]
+  selected: ReadonlySet<string>
 ): boolean
 
 /** Una opción por grafía distinta, ya ordenada (ver "Orden del menú"). */
@@ -227,8 +227,8 @@ Los empates se rompen alfabéticamente (`localeCompare` en `es`) para que el ord
 sea estable entre renders. "Sin dato" siempre va al final, igual que en los charts:
 es una fuga de atribución, no una categoría que compita en el ranking.
 
-Las opciones de un grupo con más de una grafía llevan `hasVariants: true`, que la
-UI usa para marcarlas.
+Cada opción lleva el `variantCount` de su grupo. La UI marca las que tienen más
+de una, y el aviso puede decir cuántas son.
 
 ## UI: se reusa `MultiSelectFilter`
 
@@ -248,9 +248,9 @@ pasan de ~15 a bastantes más por dimensión, y la lista deja de ser escaneable.
 acentos ni mayúsculas** para que escribir `walk` encuentre las tres variantes. Se
 activa solo en los menús de origen y canal.
 
-**2. `MultiSelectOption.variantHint?: string`.** El texto del aviso de variante.
-Cuando viene, la fila muestra un ⚠ discreto junto a la grafía con ese texto como
-`title`: *"3 grafías distintas de este valor — probable error de captura en el
+**2. `MultiSelectOption.variantHint?: string`.** El texto del aviso de variante,
+compuesto a partir de `variantCount`. Cuando viene, la fila muestra un ⚠ discreto
+junto a la grafía con ese texto como `title`: *"3 grafías distintas de este valor — probable error de captura en el
 CRM"*. Es la razón de ser de todo el diseño sin agrupar; conviene que se lea como
 señal, no como decoración.
 
@@ -354,8 +354,8 @@ Más aserciones:
 - **Sí se recorta el espacio:** `"Walk In "` y `"Walk In"` son una sola opción.
 - Orden: las grafías de un mismo grupo salen consecutivas, los grupos ordenados por
   su total descendente, y "Sin dato" al final.
-- `hasVariants` es true exactamente para las opciones cuyo `groupKey` comparten con
-  otra.
+- `variantCount` es el número de grafías del grupo: 1 para una opción sola, y el
+  total del grupo para cada una de sus variantes.
 - "Sin dato" selecciona exactamente las oportunidades sin valor en esa dimensión, y
   su centinela no colisiona con ninguna grafía capturable.
 
