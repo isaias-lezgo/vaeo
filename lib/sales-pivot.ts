@@ -68,13 +68,13 @@ export function closeDateOf(opp: Opportunity): string | undefined {
 // GHL stores DATE fields at UTC midnight, so the month MUST be read in UTC.
 // With a local (America/Mexico_City) reading, a close on the 1st at 00:00Z
 // lands on the previous month.
-function monthKeyOf(iso: string): string {
+export function monthKeyOf(iso: string): string {
   const d = new Date(iso)
   const m = String(d.getUTCMonth() + 1).padStart(2, "0")
   return `${d.getUTCFullYear()}-${m}`
 }
 
-function monthLabelOf(key: string): string {
+export function monthLabelOf(key: string): string {
   const [year, month] = key.split("-")
   return `${MONTHS_ES[Number(month) - 1]} ${year}`
 }

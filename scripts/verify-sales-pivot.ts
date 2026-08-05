@@ -20,6 +20,7 @@ import {
   NO_SUCURSAL,
   TOTAL_KEY,
 } from "../lib/sales-pivot";
+import { buildSalesSeries, OTROS_KEY } from "../lib/sales-series";
 import { PANEL_SCOPES, resolvePipelineId, scopeOpportunities } from "../lib/panel-scope";
 import { applyHubspotFilter, hasHubspotId, isHubspotImport } from "../lib/hubspot-import";
 
@@ -287,6 +288,130 @@ function main() {
     const off = buildSalesPivot(applyHubspotFilter(set, false), { sucursalField: SUCURSAL_FIELD });
     assert.equal(on.grandTotal, 1525, "prendido suma las tres");
     assert.equal(off.grandTotal, 525, "apagado suma la orgánica y la migrada-pero-cerrada-aquí");
+  }
+
+  // 10. sales-series: cuadre exacto con el pivote sobre el mismo input.
+  // Es LA aserción del módulo: los dos charts y la tabla viven en la misma
+  // pantalla, así que una discrepancia es visible y vergonzosa.
+  {
+    const opps = [
+      opp({ value: 100, cierre: "2026-06-10T00:00:00.000Z", sucursal: "MTY Tanarah", servicio: "Coworking" }),
+      opp({ value: 250, cierre: "2026-06-20T00:00:00.000Z", sucursal: "QRO Central Park", servicio: "Coworking" }),
+      opp({ value: 70, cierre: "2026-07-01T00:00:00.000Z", sucursal: "MTY Tanarah", servicio: "Sala de Juntas" }),
+      opp({ value: 30, cierre: "2026-07-05T00:00:00.000Z", sucursal: "SLP Covalia" }),
+      opp({ value: 40, sucursal: "MTY Tanarah", servicio: "Coworking" }),
+    ];
+    const pivot = buildSalesPivot(opps, { sucursalField: SUCURSAL_FIELD });
+    const series = buildSalesSeries(opps, {
+      dimensionField: SUCURSAL_FIELD,
+      emptyLabel: NO_SUCURSAL,
+    });
+
+    assert.equal(series.grandTotal, pivot.grandTotal, "el total general cuadra con el pivote");
+
+    for (const bucket of series.buckets) {
+      const cell = cellAt(pivot, bucket.key, TOTAL_KEY);
+      assert.equal(bucket.total, cell.value, `el bucket ${bucket.key} cuadra con su fila`);
+    }
+
+    for (const s of series.series) {
+      const cell = cellAt(pivot, TOTAL_KEY, `sub||${s.key}`);
+      assert.equal(s.total, cell.value, `la serie ${s.key} cuadra con su subtotal`);
+    }
+  }
+
+  // 11. sales-series: orden, cubetas y drill.
+  {
+    const opps = [
+      opp({ value: 10, cierre: "2026-05-02T00:00:00.000Z", sucursal: "MTY Tanarah" }),
+      opp({ value: 900, cierre: "2026-04-02T00:00:00.000Z", sucursal: "QRO Central Park" }),
+      opp({ value: 5, cierre: "2026-04-03T00:00:00.000Z" }),
+      opp({ value: 7, sucursal: "MTY Tanarah" }),
+      opp({ value: 3, cierre: "2026-04-01T00:00:00.000Z", sucursal: "MTY Tanarah", status: "lost", stage: "Perdido" }),
+    ];
+    const d = buildSalesSeries(opps, {
+      dimensionField: SUCURSAL_FIELD,
+      emptyLabel: NO_SUCURSAL,
+    });
+
+    assert.deepEqual(
+      d.series.map((s) => s.key),
+      ["QRO Central Park", "MTY Tanarah", NO_SUCURSAL],
+      "series por total desc, la cubeta vacía siempre al final"
+    );
+    assert.deepEqual(
+      d.buckets.map((b) => b.label),
+      ["abr 2026", "may 2026", "Sin fecha de cierre"],
+      "meses ascendentes y la cubeta sin fecha al FINAL (al revés que el pivote)"
+    );
+    assert.equal(d.buckets[2].kind, "no-date");
+    assert.equal(d.buckets[2].total, 7, "la ganada sin fecha vive en su propio bucket");
+    assert.equal(d.grandTotal, 922, "la perdida no cuenta; todo lo demás sí");
+
+    const abr = d.buckets[0];
+    assert.equal(abr.values["QRO Central Park"], 900);
+    assert.equal(abr.values[NO_SUCURSAL], 5, "sucursal vacía cae en la cubeta vacía");
+    assert.equal(abr.values["MTY Tanarah"], undefined, "una serie sin valor no ocupa lugar");
+    assert.equal(abr.oppIds["QRO Central Park"].length, 1, "el drill trae los ids de la celda");
+  }
+
+  // 12. sales-series: la cola se pliega en "Otros" cuando hay más de maxNamed.
+  {
+    const mk = (servicio: string, value: number) =>
+      opp({ value, cierre: "2026-04-02T00:00:00.000Z", servicio });
+    const opps = [
+      mk("A", 100), mk("B", 90), mk("C", 80), mk("D", 70),
+      mk("E", 60), mk("F", 50), mk("G", 40),
+    ];
+    const d = buildSalesSeries(opps, {
+      dimensionField: "Servicio",
+      emptyLabel: NO_SERVICIO,
+      maxNamed: 5,
+    });
+
+    assert.deepEqual(
+      d.series.map((s) => s.key),
+      ["A", "B", "C", "D", "E", OTROS_KEY],
+      "las 5 mayores conservan nombre, F y G se pliegan"
+    );
+    assert.equal(d.series[5].total, 90, "Otros suma la cola");
+    assert.equal(d.series[5].foldedCount, 2, "Otros dice cuántas plegó");
+    assert.equal(d.buckets[0].oppIds[OTROS_KEY].length, 2, "el drill de Otros trae las dos");
+    assert.equal(d.grandTotal, 490, "plegar no cambia el total");
+  }
+
+  // 13. sales-series: namedKeys congela qué series existen. Sin esto, filtrar
+  // por fecha puede "despiegar" una serie que en el total vive dentro de Otros,
+  // y el chart repinta colores al mover el filtro.
+  {
+    const mk = (servicio: string, value: number) =>
+      opp({ value, cierre: "2026-04-02T00:00:00.000Z", servicio });
+    const d = buildSalesSeries([mk("F", 50), mk("G", 40)], {
+      dimensionField: "Servicio",
+      emptyLabel: NO_SERVICIO,
+      namedKeys: ["A", "B", "C", "D", "E"],
+    });
+    assert.deepEqual(
+      d.series.map((s) => s.key),
+      [OTROS_KEY],
+      "F y G siguen plegadas aunque a solas serían las mayores"
+    );
+    assert.equal(d.series[0].total, 90, "Otros suma las dos");
+  }
+
+  // 14. sales-series: no se pliega una sola sobrante — "Otros (1)" es absurdo.
+  {
+    const mk = (servicio: string, value: number) =>
+      opp({ value, cierre: "2026-04-02T00:00:00.000Z", servicio });
+    const d = buildSalesSeries(
+      [mk("A", 100), mk("B", 90), mk("C", 80), mk("D", 70), mk("E", 60), mk("F", 50)],
+      { dimensionField: "Servicio", emptyLabel: NO_SERVICIO, maxNamed: 5 }
+    );
+    assert.deepEqual(
+      d.series.map((s) => s.key),
+      ["A", "B", "C", "D", "E", "F"],
+      "con una sola sobrante se queda con su nombre"
+    );
   }
 
   console.log("verify-sales-pivot: all assertions passed");
