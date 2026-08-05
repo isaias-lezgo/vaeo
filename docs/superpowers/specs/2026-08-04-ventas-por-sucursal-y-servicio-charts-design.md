@@ -113,8 +113,27 @@ filtrar solo para obtener el orden, otra sobre el filtrado para pintar. El módu
 nada de colores: eso se queda en la UI.
 
 La cubeta vacía (`Sin sucursal` / `Sin servicio`) **no** toma color de la paleta; va en
-gris neutro (`hsl(var(--muted-foreground))` al 45%) al final del stack, para que no compita
-con una sucursal real.
+gris neutro al final del stack, para que no compita con una sucursal real.
+
+### Cuántas series caben (medido, no opinado)
+
+`CHART_PALETTE` **no sirve para un stack**. Validada con el script de la skill `dataviz`,
+falla desde 5 slots: `#8b5cf6` y `#2563eb` quedan a ΔE 12.7 en visión normal — un lector
+sin daltonismo no los distingue — y `#335577` cae bajo el piso de croma, o sea lee gris,
+que es justo el color reservado para la cubeta vacía.
+
+Se agrega una paleta aparte para estos charts (`SERIES_PALETTE`), sin tocar
+`CHART_PALETTE`, que sigue sirviendo a `chat-chart.tsx`. **Cinco tonos**, validados en modo
+`--pairs all` (cualquier par de la leyenda, no solo los vecinos del stack) y en los dos
+temas contra la superficie real de la tarjeta. El modo oscuro tiene **sus propios pasos**:
+los tonos claros caen fuera de la banda de luminosidad sobre fondo oscuro.
+
+Consecuencia: una dimensión con más de cinco valores **pliega su cola en "Otros"**
+(gris, distinto del gris de la cubeta vacía). Sucursal VAEO tiene 4 valores y MESH 2, así
+que ahí nunca se pliega nada; Servicio tiene ~10 y sí. Qué se pliega se decide **una sola
+vez sobre el set sin filtrar** y se le impone a la llamada filtrada (`namedKeys`) — si se
+decidiera sobre el set filtrado, un servicio chico en el año pero grande en un mes saldría
+de "Otros" al filtrar y repintaría las demás series.
 
 ### La barra "Sin fecha de cierre"
 
