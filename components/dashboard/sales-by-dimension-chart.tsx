@@ -184,7 +184,9 @@ export function SalesByDimensionChart({
     () =>
       data.buckets.map((b) => {
         const row: Record<string, string | number> = {
-          label: b.label,
+          // "Sin fecha de cierre" completo no cabe en el último tick: se sale
+          // de la tarjeta. La nota al pie lo dice con todas sus letras.
+          label: b.kind === "no-date" ? "Sin fecha" : b.label,
           total: b.total,
           [TOTAL_ANCHOR]: 0,
         }
@@ -220,6 +222,12 @@ export function SalesByDimensionChart({
   const dimLabel = dimension === "sucursal" ? "sucursal" : "servicio"
   const noDateTotal = data.buckets.find((b) => b.kind === "no-date")?.total ?? 0
 
+  // ChartStyle emite `--color-<slot>` bajo el selector [data-chart=chart-<id>],
+  // y la leyenda vive FUERA del ChartContainer, donde esas variables no
+  // existirían. Marcar el bloque de chips con el MISMO data-chart las trae —
+  // el <style> es global, solo hay que estar dentro de su selector.
+  const chartId = `ventas-${panel}-${dimension}`
+
   return (
     <DashboardCard>
       <ChartCardHeader
@@ -248,7 +256,10 @@ export function SalesByDimensionChart({
           <ChartEmpty message="Sin ventas cerradas en el periodo seleccionado" />
         ) : (
           <>
-            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <div
+              data-chart={`chart-${chartId}`}
+              className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5"
+            >
               {slots.map(({ entry, slot }) => {
                 const dimmed = isolated !== null && isolated !== slot
                 return (
@@ -273,8 +284,12 @@ export function SalesByDimensionChart({
               })}
             </div>
 
-            <ChartContainer config={config} className="aspect-auto h-[300px] w-full">
-              <BarChart data={rows} margin={{ top: 24, right: 8, bottom: 0, left: 8 }}>
+            <ChartContainer
+              id={chartId}
+              config={config}
+              className="aspect-auto h-[300px] w-full"
+            >
+              <BarChart data={rows} margin={{ top: 24, right: 12, bottom: 0, left: 8 }}>
                 <CartesianGrid vertical={false} stroke={CHART_GRID_STROKE} />
                 <XAxis
                   dataKey="label"

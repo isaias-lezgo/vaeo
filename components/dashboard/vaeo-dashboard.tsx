@@ -13,6 +13,12 @@ import type {
 import type { ResolvedDateRange } from "@/lib/date-range"
 import { DashboardShell } from "./dashboard-ui"
 import { SalesPivotTable } from "./sales-pivot-table"
+import { SalesByDimensionChart } from "./sales-by-dimension-chart"
+import { OpportunityStatusChart } from "./opportunity-status-chart"
+import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
+import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
+import { AdvisorStageTable } from "./advisor-stage-table"
+import { LostReasonMatrix } from "./lost-reason-matrix"
 
 /**
  * VAEO — one of the two business lines (oficinas virtuales / oficinas equipadas
@@ -61,6 +67,7 @@ export interface VaeoDashboardProps {
 }
 
 export function VaeoDashboard({
+  opportunities,
   contacts,
   allContacts = [],
   allOpportunities = [],
@@ -73,6 +80,24 @@ export function VaeoDashboard({
   messages = [],
   locationId,
 }: VaeoDashboardProps) {
+  // Todo lo que los tres gráficos por-oportunidad necesitan es idéntico, así que
+  // se arma una sola vez. El panel MESH rinde exactamente los mismos con
+  // panel="mesh"; si esto crece, extráelo antes de que las dos listas diverjan.
+  const shared = {
+    panel: "vaeo" as const,
+    opportunities,
+    allOpportunities,
+    contacts,
+    allContacts,
+    pipelines,
+    tasks,
+    calls,
+    allPautas,
+    appointments,
+    messages,
+    locationId,
+  }
+
   return (
     <DashboardShell>
       <SalesPivotTable
@@ -89,6 +114,20 @@ export function VaeoDashboard({
         messages={messages}
         locationId={locationId}
       />
+      {/* La misma agregación que la tabla de arriba, en otra forma: los totales
+          tienen que cuadrar con ella al centavo. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <SalesByDimensionChart {...shared} dimension="sucursal" dateRange={dateRange} />
+        <SalesByDimensionChart {...shared} dimension="servicio" dateRange={dateRange} />
+      </div>
+      <OpportunityStatusChart {...shared} />
+      <OpportunityWinRateChart {...shared} />
+      <AdvisorStageTable {...shared} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <OrigenDeLeadChart {...shared} />
+        <CanalDeContactoChart {...shared} />
+      </div>
+      <LostReasonMatrix {...shared} />
     </DashboardShell>
   )
 }

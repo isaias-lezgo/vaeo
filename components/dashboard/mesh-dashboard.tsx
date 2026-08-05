@@ -11,7 +11,13 @@ import type {
   Message,
 } from "@/lib/types"
 import type { ResolvedDateRange } from "@/lib/date-range"
-import { DashboardShell, PanelPlaceholder } from "./dashboard-ui"
+import { DashboardShell } from "./dashboard-ui"
+import { SalesByDimensionChart } from "./sales-by-dimension-chart"
+import { OpportunityStatusChart } from "./opportunity-status-chart"
+import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
+import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
+import { AdvisorStageTable } from "./advisor-stage-table"
+import { LostReasonMatrix } from "./lost-reason-matrix"
 
 /**
  * MESH — the second business line: the coworking brand under Grupo VAEO
@@ -61,21 +67,50 @@ export interface MeshDashboardProps {
 export function MeshDashboard({
   opportunities,
   contacts,
+  allContacts = [],
+  allOpportunities = [],
+  pipelines = [],
+  dateRange = null,
+  tasks = [],
+  calls = [],
+  allPautas = [],
   appointments = [],
-  pautas = [],
+  messages = [],
+  locationId,
 }: MeshDashboardProps) {
+  // Mismo bloque que en el panel VAEO, con el embudo cambiado: los dos paneles
+  // son los mismos gráficos sobre pipelines distintos.
+  const shared = {
+    panel: "mesh" as const,
+    opportunities,
+    allOpportunities,
+    contacts,
+    allContacts,
+    pipelines,
+    tasks,
+    calls,
+    allPautas,
+    appointments,
+    messages,
+    locationId,
+  }
+
   return (
     <DashboardShell>
-      <PanelPlaceholder
-        brand="MESH"
-        tagline="Coworking, oficinas privadas y salas de reuniones"
-        counts={[
-          { label: "contactos", value: contacts.length },
-          { label: "oportunidades", value: opportunities.length },
-          { label: "citas", value: appointments.length },
-          { label: "pautas", value: pautas.length },
-        ]}
-      />
+      {/* Mismo par de charts que en VAEO: solo cambia el embudo y, con él, el
+          campo de sucursal ("Sucursal MESH"), que resuelve PANEL_SCOPES. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <SalesByDimensionChart {...shared} dimension="sucursal" dateRange={dateRange} />
+        <SalesByDimensionChart {...shared} dimension="servicio" dateRange={dateRange} />
+      </div>
+      <OpportunityStatusChart {...shared} />
+      <OpportunityWinRateChart {...shared} />
+      <AdvisorStageTable {...shared} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <OrigenDeLeadChart {...shared} />
+        <CanalDeContactoChart {...shared} />
+      </div>
+      <LostReasonMatrix {...shared} />
     </DashboardShell>
   )
 }
