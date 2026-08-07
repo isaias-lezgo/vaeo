@@ -184,9 +184,44 @@ that differs between the two lines as well. `resolvePipelineId()` matches the pi
 
 ### Current state
 
-- Both panels now render charts; `PanelPlaceholder` is no longer used by either. **Shared by both** (identical code, only `panel` differs): `opportunity-status-chart.tsx`, `opportunity-win-rate-chart.tsx`, `lost-reason-matrix.tsx` (tabla "Motivos de perdido": motivo × categoría, con un switch propio entre Canal de Contacto y Origen de Lead — el switch es estado local de la tarjeta, no un filtro global), `advisor-stage-table.tsx` (tabla "Oportunidades por asesor": asesor × etapa, con una barra apilada de estatus por fila; el sombreado se normaliza **por columna** y la fila "Sin asesor" queda fuera de esa normalización y del tinte, porque es un orden de magnitud mayor), and two mounts of `category-breakdown-chart.tsx` (`OrigenDeLeadChart` / `CanalDeContactoChart`, both exported from that file with their tooltip copy), and two mounts of `sales-by-dimension-chart.tsx` (ventas apiladas por mes de cierre, cortadas por sucursal y por servicio — calcan los dos charts de Looker Studio que el cliente ya usa), y `sales-pivot-table.tsx` ("Resumen general de ventas", encabeza los dos paneles) — sus totales y los de las barras salen del mismo agregado y `pnpm verify:pivot` asegura que cuadran. En su cabecera la jerarquía está invertida a propósito: sucursal y servicio llevan el peso (banda `bg-muted`, `text-sm`/`text-[13px]`) y las celdas de importe van en `text-muted-foreground`; solo subtotales, la columna Total y la fila de totales recuperan el color pleno. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above). Each panel builds one `shared` object and spreads it into every per-opportunity chart; keep that pattern rather than re-listing props per chart.
+- Both panels now render charts; `PanelPlaceholder` is no longer used by either. **Shared by both** (identical code, only `panel` differs): `opportunity-status-chart.tsx`, `opportunity-win-rate-chart.tsx`, `lost-reason-matrix.tsx` (tabla "Motivos de perdido": motivo × categoría, con un switch propio entre Canal de Contacto y Origen de Lead — el switch es estado local de la tarjeta, no un filtro global), `advisor-stage-table.tsx` (tabla "Oportunidades por asesor": asesor × etapa, con una barra apilada de estatus por fila; el sombreado se normaliza **por columna** y la fila "Sin asesor" queda fuera de esa normalización y del tinte, porque es un orden de magnitud mayor), `stale-opportunity-matrix.tsx` ("Oportunidades sin atención": días sin cambio de etapa × días sin mensaje saliente, sobre las abiertas del embudo vivo — sin Ganado, Perdido ni Cliente Futuro), `task-backlog-chart.tsx` ("Tareas pendientes por asesor", barras apiladas por vencimiento), and two mounts of `category-breakdown-chart.tsx` (`OrigenDeLeadChart` / `CanalDeContactoChart`, both exported from that file with their tooltip copy), and two mounts of `sales-by-dimension-chart.tsx` (ventas apiladas por mes de cierre, cortadas por sucursal y por servicio — calcan los dos charts de Looker Studio que el cliente ya usa), y `sales-pivot-table.tsx` ("Resumen general de ventas", encabeza los dos paneles) — sus totales y los de las barras salen del mismo agregado y `pnpm verify:pivot` asegura que cuadran. En su cabecera la jerarquía está invertida a propósito: sucursal y servicio llevan el peso (banda `bg-muted`, `text-sm`/`text-[13px]`) y las celdas de importe van en `text-muted-foreground`; solo subtotales, la columna Total y la fila de totales recuperan el color pleno. **Their prop surface is intentionally identical and fully wired** — `app/page.tsx` already feeds both the date-filtered slices and the unfiltered `all*` lookup sets, so a new chart drops in with no plumbing. Keep the two prop lists in sync so a chart can move between panels unchanged — the only thing that should differ between the two panels is the pipeline scope (see above). Each panel builds one `shared` object and spreads it into every per-opportunity chart; keep that pattern rather than re-listing props per chart.
 - **`ChartContainer` (`components/ui/chart.tsx`) already wraps its child in a Recharts `ResponsiveContainer`.** Do not nest another one inside it — the chart still renders, but Recharts logs "width and height are both fixed numbers" on every resize. Charts recovered from git history predate this and do nest one; drop it when you port them.
 - Both panels also take **`dateRange`** (the resolved `ResolvedDateRange | null` from `app/page.tsx`). It exists for charts that measure a date *other than* `createdAt`: the pivot table filters `allOpportunities` by **Fecha de Cierre** itself, because the pre-filtered `opportunities` prop is cut by creation date and would silently drop an opportunity created outside the window but closed inside it.
+- **Los dos gráficos de vigilancia de asesoras ignoran el filtro global de fechas**
+  (`stale-opportunity-matrix.tsx`, `task-backlog-chart.tsx`). "Sin atención en 60 días" y
+  "vencida" son condiciones de HOY, no de un periodo, así que leen `allOpportunities` y la
+  prop nueva `allTasks` en vez de las slices filtradas. Sí respetan sucursal / asesor /
+  origen / canal y el toggle de HubSpot, porque esos ya vienen aplicados aguas arriba.
+  - Existe una tercera prop, **`unfilteredOpportunities`** (el set crudo de
+    `data.opportunities`), y NO es redundante con `allOpportunities`: esa última ya pasó
+    por los menús de panel. Solo la usa el rezago de tareas, para distinguir al contacto
+    que no tiene NINGUNA oportunidad —que va a la nota al pie, fuera del agregado— del que
+    sí tiene pero quedó fuera de un filtro. Con `allOpportunities` en su lugar, poner un
+    filtro de sucursal hacía que la nota afirmara que 131 contactos no tenían
+    oportunidades cuando sí las tenían. No las fusiones.
+  - El eje de mensajes de la matriz **no** sale del dataset de `dashboard-messages`: esa
+    ruta trae las últimas 30 conversaciones POR USUARIO (~270 de 12 054), y la ausencia de
+    un contacto ahí no prueba silencio, solo que no entró en la muestra. Sale de
+    `app/api/conversation-activity`, que recorre `/conversations/search` por cursor hasta
+    `STALE_HORIZON_DAYS` y solo abre el hilo de las conversaciones que terminan en
+    entrante — el resto ya tiene su fecha en `lastMessageDate`. Medido: 3 200
+    conversaciones recorridas, 600 hilos abiertos, ~85 s.
+  - **`/conversations/search` devuelve `lastMessageDate` como epoch en MILISEGUNDOS**, no
+    como el ISO que declara el tipo y que usa el resto de la API. La ruta lo normaliza con
+    `toIso()` en la frontera. No lo quites: río abajo se hace `new Date(valor)`, que con un
+    número funciona de casualidad, pero el mismo epoch como cadena daría Invalid Date y
+    mandaría a todos los contactos a la cubeta de abandono.
+  - **`STALE_HORIZON_DAYS` (60) acopla la ruta a las cubetas.** Si se agrega una cubeta de
+    90 días hay que subirla, o las conversaciones entre 60 y 90 días nunca llegarán y el
+    gráfico mentirá.
+  - **La matriz no se renderiza hasta que `activityStatus === "ready"`.** Con el mapa
+    vacío toda oportunidad cae en la columna "+60 d" y el gráfico afirma un abandono
+    total: alarmante, verosímil y falso. `loading` pinta un esqueleto y `error` pinta un
+    estado explícito con reintentar — nunca ceros, nunca una matriz parcial.
+  - **El movimiento se mide con `lastStageChangeAt`, nunca con `updatedAt`.** La cuenta
+    corre flujos de Make y un bot de WhatsApp, y cada escritura automática empuja
+    `updatedAt` (medido: 7-9 min por delante de `createdAt` en oportunidades que nadie
+    tocó); un gráfico basado en él reportaría que todo se está trabajando.
 - Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
 - The third tab (`DashboardTab` id `"conversations"`, labelled **"Asistente IA"**) renders `conversations-chat.tsx`. It is **permanently mounted and merely hidden** when inactive, so the chat history survives tab switches — do not make it conditional. It always sees the full, unfiltered dataset.
 - Both dashboards can **export a branded PDF report** of their own charts (see "PDF report export").
@@ -378,6 +413,8 @@ bug class these modules were extracted to kill.
 | `lib/opportunity-breakdown.ts` | won/open/lost bucketing per month + "Origen de Lead" / "Canal de Contacto" category rollups |
 | `lib/lost-reason-matrix.ts` | el cruce motivo de perdido × categoría (toma sus columnas de `buildCategoryBreakdown`, no re-normaliza) |
 | `lib/advisor-breakdown.ts` | la matriz asesor × etapa del embudo + el desglose de estatus por asesor |
+| `lib/stale-opportunity-matrix.ts` | el universo del embudo vivo + las cubetas de abandono en los dos ejes (movimiento y mensajes) |
+| `lib/task-backlog.ts` | las cubetas de vencimiento de tareas, calculadas en `America/Mexico_City` |
 
 - **`isWonOpp()`**: some sub-accounts never flip `status` to `"won"` — they record a sale
   by moving the opportunity into a late stage ("09. Negocio Ganado") while `status`
