@@ -19,6 +19,7 @@
     "verify:advisors": "tsx scripts/verify-advisors.ts",
     "verify:filters": "tsx scripts/verify-panel-filters.ts",
     "verify:task-backlog": "tsx scripts/verify-task-backlog.ts",
+    "verify:stale-matrix": "tsx scripts/verify-stale-matrix.ts",
     "add-client": "tsx scripts/add-client.ts"
   },
   "dependencies": {

@@ -353,6 +353,9 @@ export interface GHLOpportunity {
   closedAt?: string;
   createdAt: string;
   updatedAt?: string;
+  // Solo cambia cuando alguien mueve la oportunidad de etapa — a diferencia de
+  // updatedAt, que empujan también las automatizaciones de Make y el bot.
+  lastStageChangeAt?: string;
   lastStatusChangeAt?: string;
   source?: string;
   campaignId?: string;

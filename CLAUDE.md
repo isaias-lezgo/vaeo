@@ -67,6 +67,7 @@ pnpm verify:advisors     # lib/advisor-breakdown.ts — matriz asesor × etapa +
 pnpm verify:filters      # lib/panel-filters.ts — filtros globales de sucursal y asesor
 pnpm verify:category-filter # lib/category-filter.ts — opciones de origen/canal SIN agrupar grafías
 pnpm verify:task-backlog # lib/task-backlog.ts — cubetas de vencimiento por zona horaria
+pnpm verify:stale-matrix # lib/stale-opportunity-matrix.ts — cubetas de abandono en ambos ejes
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
 ```
 

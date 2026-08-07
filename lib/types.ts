@@ -82,6 +82,9 @@ export interface Opportunity {
   probability?: number
   closedAt?: string
   updatedAt?: string
+  /** Última vez que la oportunidad cambió de ETAPA. La señal honesta de movimiento. */
+  lastStageChangeAt?: string
+  lastStatusChangeAt?: string
   source?: string
   campaignId?: string
   funnelId?: string
