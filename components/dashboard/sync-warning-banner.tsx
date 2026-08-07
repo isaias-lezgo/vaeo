@@ -13,7 +13,15 @@ const DATASET_COPY: Record<string, { name: string; impact: string }> = {
   opportunities: { name: "las oportunidades", impact: "Las gráficas de ventas y conversión quedan incompletas." },
   pautas: { name: "las pautas", impact: "Las gráficas de campañas y pauta quedan incompletas." },
   appointments: { name: "las citas", impact: "Las gráficas de agenda quedan incompletas." },
-  tasks: { name: "las tareas", impact: "Las gráficas de seguimiento quedan incompletas." },
+  // El impacto se nombra por lo que REALMENTE depende de las tareas: el rezago
+  // por asesor (solo pendientes) y el historial/tasa de completado. Antes decía
+  // "las gráficas de seguimiento quedan incompletas", que acusaba de incompleto
+  // al rezago por asesor incluso cuando el recorte había sido solo de tareas
+  // completadas y ese gráfico estaba entero.
+  tasks: {
+    name: "las tareas",
+    impact: "El rezago por asesor y el historial de tareas pueden quedar cortos.",
+  },
 }
 
 function describe(w: SyncWarning): string {

@@ -597,9 +597,10 @@ export async function GET() {
                 // paso como "partial" y que la ruta emita el warning ámbar. No se
                 // sabe CUÁNTAS faltan (el endpoint no reporta total), así que va
                 // sin `total` y el banner omite el "de ~N".
+                const cut = truncated.pending || truncated.completed;
                 return {
                   records,
-                  missingPages: truncated ? [1] : [],
+                  missingPages: cut ? [1] : [],
                   missingEstimate: 0,
                 };
               }),

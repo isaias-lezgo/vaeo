@@ -13,7 +13,7 @@ import {
   note429,
   RATE_LIMIT_INTERVAL_MS,
 } from "./ghl-limiter";
-import { fanOutPages, cursorWalk, type PagedResult } from "./paged-fetch";
+import { fanOutPages, cursorWalk, walkOffsetPages, type PagedResult } from "./paged-fetch";
 
 const GHL_BASE_URL = "https://services.leadconnectorhq.com";
 // GHL's current API contract. Verified (read-only probe) to return shapes
@@ -771,26 +771,40 @@ async function fetchTaskPage(filters: {
   });
 }
 
+/**
+ * Freno de emergencia por ESTADO, no presupuesto. Medido en la sub-cuenta de
+ * Grupo VAEO (2026-08-07): 138 pendientes y 1,154 completadas. Con el tope
+ * anterior de 500 se descartaban ~654 completadas en cada sync, en silencio, y
+ * el resumen que el asistente de IA arma en lib/ai-context.ts calculaba la tasa
+ * de completado sobre esa muestra sesgada: reportaba ~78 % contra un 89 % real.
+ *
+ * 5,000 por estado deja años de holgura sobre el volumen actual y sigue
+ * acotando una cuenta desbocada. Si algún día se alcanza, ahora se avisa.
+ */
+const TASK_CAP_PER_STATE = 5000;
+
 async function paginateTasks(filters: {
   contactId?: string[];
   completed: boolean;
   assignedTo?: string[];
   query?: string;
 }, cap: number): Promise<{ tasks: GHLTask[]; truncated: boolean }> {
-  const limit = 100;
-  const all: GHLTask[] = [];
-  let skip = 0;
-  while (true) {
-    const res = await fetchTaskPage(filters, skip, limit);
-    all.push(...res.tasks);
-    // Página corta = se acabaron los datos. Esta es la ÚNICA salida limpia.
-    if (res.tasks.length < limit) return { tasks: all, truncated: false };
-    skip += limit;
-    // Salir por el tope significa que quedaron tareas sin traer, y el llamador
-    // tiene que poder decirlo: un gráfico de rezago que subcuenta en silencio
-    // da una respuesta tranquilizadora y falsa.
-    if (all.length >= cap) return { tasks: all, truncated: true };
-  }
+  const { records, truncated } = await walkOffsetPages<GHLTask>({
+    fetchPage: async (skip, limit) => (await fetchTaskPage(filters, skip, limit)).tasks,
+    pageSize: 100,
+    cap,
+  });
+  return { tasks: records, truncated };
+}
+
+export interface LocationTasksResult {
+  tasks: GHLTask[];
+  /**
+   * Por estado, porque el impacto es distinto: recortar PENDIENTES falsea el
+   * rezago por asesor, y recortar COMPLETADAS falsea la tasa de completado.
+   * Un solo booleano obligaba al aviso a acusar a las dos cosas a la vez.
+   */
+  truncated: { pending: boolean; completed: boolean };
 }
 
 // GHL's task search endpoint requires `completed` to be explicitly set —
@@ -800,21 +814,29 @@ export async function searchLocationTasks(filters: {
   completed?: boolean;
   assignedTo?: string[];
   query?: string;
-} = {}): Promise<{ tasks: GHLTask[]; truncated: boolean }> {
-  const CAP = 500;
-
+} = {}): Promise<LocationTasksResult> {
   if (filters.completed !== undefined) {
-    return paginateTasks({ ...filters, completed: filters.completed }, CAP);
+    const one = await paginateTasks(
+      { ...filters, completed: filters.completed },
+      TASK_CAP_PER_STATE
+    );
+    return {
+      tasks: one.tasks,
+      truncated: {
+        pending: filters.completed === false && one.truncated,
+        completed: filters.completed === true && one.truncated,
+      },
+    };
   }
 
   const { completed: _ignored, ...rest } = filters;
   const [pending, done] = await Promise.all([
-    paginateTasks({ ...rest, completed: false }, CAP),
-    paginateTasks({ ...rest, completed: true }, CAP),
+    paginateTasks({ ...rest, completed: false }, TASK_CAP_PER_STATE),
+    paginateTasks({ ...rest, completed: true }, TASK_CAP_PER_STATE),
   ]);
   return {
     tasks: [...pending.tasks, ...done.tasks],
-    truncated: pending.truncated || done.truncated,
+    truncated: { pending: pending.truncated, completed: done.truncated },
   };
 }
 

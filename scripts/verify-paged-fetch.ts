@@ -8,7 +8,7 @@
 //
 // Wrapped in main() rather than using top-level await: this package is CJS.
 import assert from "node:assert/strict";
-import { fanOutPages, cursorWalk } from "../lib/paged-fetch";
+import { fanOutPages, cursorWalk, walkOffsetPages } from "../lib/paged-fetch";
 
 type Row = { id: string };
 
@@ -280,6 +280,94 @@ async function main() {
     });
     assert.equal(res.records.length, 100, "absorbed the one distinct page");
     assert.equal(calls, 2, "bailed out on the first all-duplicate page");
+  }
+
+  // ============ walkOffsetPages — el recorrido por offset con tope ============
+  //
+  // Este bloque nace de un falso positivo observado en producción: el panel
+  // avisó "Tareas · parcial · 638" y la pregunta era si el aviso decía la
+  // verdad. Resultó que sí (1,154 completadas contra un tope de 500), pero al
+  // trazarlo apareció que el tope NO sabía distinguir "me quedé corto" de
+  // "terminé justo en el tope". Un aviso que se equivoca en cualquiera de los
+  // dos sentidos es igual de inútil: o esconde datos faltantes, o acusa de
+  // faltantes unos datos completos.
+
+  // Fetcher por offset sobre `total` filas sintéticas. Cuenta las llamadas para
+  // poder afirmar que la sonda solo se dispara cuando hace falta.
+  function offsetFetcher(total: number) {
+    const calls: Array<{ skip: number; limit: number }> = [];
+    const fetchPage = async (skip: number, limit: number) => {
+      calls.push({ skip, limit });
+      return Array.from(
+        { length: Math.max(0, Math.min(limit, total - skip)) },
+        (_, i) => ({ id: `r${skip + i}` })
+      );
+    };
+    return { fetchPage, calls };
+  }
+
+  // --- recorrido completo, sin acercarse al tope
+  {
+    const { fetchPage, calls } = offsetFetcher(138);
+    const res = await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 5000 });
+    assert.equal(res.records.length, 138);
+    assert.equal(res.truncated, false, "138 de 138: nada quedó fuera");
+    assert.equal(calls.length, 2, "página corta termina el recorrido");
+  }
+
+  // --- el tope corta de verdad: quedan datos sin traer
+  {
+    const { fetchPage, calls } = offsetFetcher(1154);
+    const res = await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 500 });
+    assert.equal(res.records.length, 500, "se detuvo en el tope");
+    assert.equal(res.truncated, true, "y quedaban 654 sin traer");
+    assert.equal(calls.at(-1)!.limit, 1, "la última llamada es la sonda barata");
+  }
+
+  // --- EL CASO QUE FALLABA: el dato termina EXACTAMENTE en el tope
+  {
+    const { fetchPage } = offsetFetcher(500);
+    const res = await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 500 });
+    assert.equal(res.records.length, 500);
+    assert.equal(
+      res.truncated,
+      false,
+      "500 de 500 está COMPLETO — llegar al tope no es lo mismo que quedarse corto"
+    );
+  }
+
+  // --- un solo registro después del tope sí cuenta como truncado
+  {
+    const { fetchPage } = offsetFetcher(501);
+    const res = await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 500 });
+    assert.equal(res.truncated, true, "501 contra un tope de 500 sí está cortado");
+  }
+
+  // --- la sonda NO se dispara cuando el recorrido terminó solo
+  {
+    const { fetchPage, calls } = offsetFetcher(138);
+    await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 5000 });
+    assert.ok(
+      calls.every((c) => c.limit === 100),
+      "sin llegar al tope no se paga la petición extra"
+    );
+  }
+
+  // --- conjunto vacío
+  {
+    const { fetchPage, calls } = offsetFetcher(0);
+    const res = await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 500 });
+    assert.equal(res.records.length, 0);
+    assert.equal(res.truncated, false, "vacío no es lo mismo que cortado");
+    assert.equal(calls.length, 1);
+  }
+
+  // --- el total es un múltiplo exacto del tamaño de página, sin tope de por medio
+  {
+    const { fetchPage } = offsetFetcher(300);
+    const res = await walkOffsetPages<Row>({ fetchPage, pageSize: 100, cap: 5000 });
+    assert.equal(res.records.length, 300);
+    assert.equal(res.truncated, false, "una página vacía al final cierra el recorrido");
   }
 
   console.log("verify-paged-fetch: all assertions passed");

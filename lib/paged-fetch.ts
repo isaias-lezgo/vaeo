@@ -110,6 +110,61 @@ export async function fanOutPages<T>({
   return { records, total, missingPages, missingEstimate };
 }
 
+// ============ OFFSET WALK WITH A CAP ============
+//
+// Para endpoints que paginan por `skip`/`limit` y NO reportan un total —
+// /locations/:id/tasks/search es el caso. El tope existe como freno de
+// emergencia, no como presupuesto: acota una cuenta desbocada sin que nadie
+// tenga que adivinar cuántos registros hay.
+//
+// Lo que este helper agrega sobre un `while` a mano es saber DECIR si se quedó
+// corto. Y ahí está la sutileza que motivó extraerlo: llegar al tope con una
+// página llena NO implica que falten datos. Si la cuenta tiene exactamente
+// `cap` registros, el recorrido termina justo en el tope y está completo. Una
+// sonda de un solo registro distingue los dos casos, y solo se paga cuando el
+// tope se alcanza.
+
+export interface OffsetWalkOptions<T> {
+  /** Una página. `limit` puede venir en 1 cuando es la sonda del final. */
+  fetchPage: (skip: number, limit: number) => Promise<T[]>;
+  pageSize: number;
+  /** Freno de emergencia, en registros. */
+  cap: number;
+}
+
+export interface OffsetWalkResult<T> {
+  records: T[];
+  /** true SOLO si se comprobó que quedaron registros sin traer. */
+  truncated: boolean;
+}
+
+export async function walkOffsetPages<T>({
+  fetchPage,
+  pageSize,
+  cap,
+}: OffsetWalkOptions<T>): Promise<OffsetWalkResult<T>> {
+  const records: T[] = [];
+  let skip = 0;
+
+  for (;;) {
+    const batch = await fetchPage(skip, pageSize);
+    records.push(...batch);
+
+    // Página corta ⇒ se acabaron los datos. Única salida limpia y barata.
+    if (batch.length < pageSize) return { records, truncated: false };
+
+    skip += pageSize;
+
+    if (records.length >= cap) {
+      // Se alcanzó el tope con una página llena. Puede que no haya nada más:
+      // preguntamos por UN registro en vez de asumir. Asumir que sí falta
+      // dispara un aviso falso; asumir que no, esconde datos perdidos.
+      const probe = await fetchPage(skip, 1);
+      return { records, truncated: probe.length > 0 };
+    }
+  }
+}
+
 // ============ CURSOR WALK ============
 //
 // GHL caps offset pagination at 10,000 records: /opportunities/search answers
