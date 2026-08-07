@@ -18,6 +18,7 @@ import { OpportunityStatusChart } from "./opportunity-status-chart"
 import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
 import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
 import { AdvisorStageTable } from "./advisor-stage-table"
+import { TaskBacklogChart } from "./task-backlog-chart"
 import { LostReasonMatrix } from "./lost-reason-matrix"
 
 /**
@@ -45,6 +46,14 @@ export interface VaeoDashboardProps {
   allPautas?: Pauta[]
   pipelines?: Pipeline[]
   tasks?: Task[]
+  /** Tareas SIN filtrar por fecha — el rezago se mide contra hoy, no contra el periodo. */
+  allTasks?: Task[]
+  /**
+   * Oportunidades crudas: sin filtros de panel ni toggle de HubSpot. Solo para
+   * distinguir al contacto que NO tiene ninguna oportunidad del que sí tiene
+   * pero quedó fuera de un filtro. No la uses para agregar nada.
+   */
+  unfilteredOpportunities?: Opportunity[]
   calls?: Call[]
   messages?: Message[]
   /** Unfiltered messages — lookup table for conversation drawers. */
@@ -74,6 +83,8 @@ export function VaeoDashboard({
   pipelines = [],
   dateRange = null,
   tasks = [],
+  allTasks = [],
+  unfilteredOpportunities = [],
   calls = [],
   allPautas = [],
   appointments = [],
@@ -123,6 +134,11 @@ export function VaeoDashboard({
       <OpportunityStatusChart {...shared} />
       <OpportunityWinRateChart {...shared} />
       <AdvisorStageTable {...shared} />
+      <TaskBacklogChart
+        {...shared}
+        allTasks={allTasks}
+        unfilteredOpportunities={unfilteredOpportunities}
+      />
       <div className="grid gap-5 lg:grid-cols-2">
         <OrigenDeLeadChart {...shared} />
         <CanalDeContactoChart {...shared} />

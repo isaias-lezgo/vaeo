@@ -136,6 +136,36 @@ async function main() {
     assert.ok(!v.unscoped.contactIds.includes("c-mesh"), "c-mesh no es huérfano, es de la otra línea");
   }
 
+  // 4b. Regresión: el tercer argumento tiene que ser el set CRUDO, no el que ya
+  //     pasó por los filtros de panel. Se detectó manejando la app real — con un
+  //     filtro de sucursal puesto, `unscoped` saltaba de 11 a 131 y la nota al
+  //     pie afirmaba que 131 contactos no tenían ninguna oportunidad cuando sí
+  //     la tenían, solo que en otra sucursal.
+  {
+    const todas = [
+      opp({ contactId: "c-qro", pipelineId: VAEO }),
+      opp({ contactId: "c-mty", pipelineId: VAEO }),
+    ];
+    // Lo que sobrevive a un filtro de sucursal = QRO.
+    const filtradas = [todas[0]];
+    const tasks = [
+      task({ contactId: "c-qro", advisor: "Zulema Silva" }),
+      task({ contactId: "c-mty", advisor: "Zulema Silva" }),
+    ];
+
+    const bien = buildTaskBacklog(tasks, filtradas, todas, NOW, PANEL_TIME_ZONE);
+    assert.equal(bien.grandTotal, 1, "solo la tarea de la sucursal filtrada cuenta");
+    assert.equal(
+      bien.unscoped.count,
+      0,
+      "c-mty NO es huérfano: tiene oportunidad, solo que en otra sucursal"
+    );
+
+    // Pasar el set ya filtrado como tercer argumento es justamente el bug.
+    const mal = buildTaskBacklog(tasks, filtradas, filtradas, NOW, PANEL_TIME_ZONE);
+    assert.equal(mal.unscoped.count, 1, "así se veía el bug: c-mty leído como huérfano");
+  }
+
   // 5. Asesor: se toma de assignedToName; vacío ⇒ "Sin asesor", siempre al final.
   {
     const opps = [

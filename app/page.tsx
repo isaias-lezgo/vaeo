@@ -506,6 +506,8 @@ export default function DashboardPage() {
             allPautas={data?.pautas ?? []}
             pipelines={data?.pipelines ?? []}
             tasks={tasks}
+            allTasks={data?.tasks ?? []}
+            unfilteredOpportunities={data?.opportunities ?? []}
             calls={calls}
             messages={filteredMessages}
             allMessages={messages}
@@ -528,6 +530,8 @@ export default function DashboardPage() {
             allPautas={data?.pautas ?? []}
             pipelines={data?.pipelines ?? []}
             tasks={tasks}
+            allTasks={data?.tasks ?? []}
+            unfilteredOpportunities={data?.opportunities ?? []}
             calls={calls}
             messages={filteredMessages}
             allMessages={messages}
