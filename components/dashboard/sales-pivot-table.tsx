@@ -140,7 +140,7 @@ export function SalesPivotTable({
           <ChartEmpty message="Sin ventas cerradas en el periodo seleccionado" />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-max border-separate border-spacing-0 text-right text-xs tabular-nums">
+            <table className="w-max min-w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
               <thead>
                 <tr>
                   <th
