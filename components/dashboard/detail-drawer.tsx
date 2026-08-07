@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog"
 import type { Opportunity, Contact, Task, Call, Appointment, Message, Pauta } from "@/lib/types"
 import {
@@ -631,6 +632,10 @@ function AppointmentDetailDialog({
               <DialogTitle className="text-base leading-snug">
                 {appointment?.title ?? "Cita"}
               </DialogTitle>
+              {/* Radix exige una descripción ligada al DialogContent */}
+              <DialogDescription className="sr-only">
+                Detalle de la cita: fecha, horario y contacto asociado.
+              </DialogDescription>
               <div className="text-xs mt-1">
                 <Badge variant="outline" className={`text-[10px] capitalize ${badgeClass}`}>
                   {appointment?.status || "pendiente"}

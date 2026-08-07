@@ -6,6 +6,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetDescription,
 } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import type { Appointment, Contact } from "@/lib/types"
@@ -75,6 +76,10 @@ export function AppointmentDrillDrawer({
             <SheetTitle className="text-[15px] font-semibold leading-snug pr-6">
               {drill.title}
             </SheetTitle>
+            {/* Radix exige una descripción ligada al SheetContent */}
+            <SheetDescription className="sr-only">
+              Listado de las citas del segmento seleccionado.
+            </SheetDescription>
           </SheetHeader>
           <div className="mt-2.5 flex items-center gap-2">
             <Badge variant="secondary" className="rounded-full text-xs font-semibold tabular-nums">

@@ -7,6 +7,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetDescription,
 } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { DetailDrawer } from "./detail-drawer"
@@ -123,9 +124,14 @@ export function ChartDrillDrawer({
                 {drill.title}
               </SheetTitle>
             </SheetHeader>
-            {drill.subtitle && (
-              <p className="text-xs text-muted-foreground mt-0.5">{drill.subtitle}</p>
-            )}
+            {/* Siempre montada: Radix exige una descripción ligada al SheetContent */}
+            <SheetDescription
+              className={
+                drill.subtitle ? "text-xs text-muted-foreground mt-0.5" : "sr-only"
+              }
+            >
+              {drill.subtitle ?? "Detalle de los registros del segmento seleccionado."}
+            </SheetDescription>
             <div className="mt-2.5 flex items-center justify-between gap-2">
               <Badge variant="secondary" className="rounded-full text-xs font-semibold tabular-nums">
                 {count.toLocaleString()} registro{count !== 1 ? "s" : ""}
