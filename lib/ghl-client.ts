@@ -552,6 +552,56 @@ export async function getConversations(params?: {
   });
 }
 
+/**
+ * Un documento de /conversations/search. Extiende GHLConversation con los
+ * campos que solo devuelve la búsqueda paginada.
+ */
+export type GHLConversationSearchDoc = Omit<GHLConversation, "lastMessageDate"> & {
+  /**
+   * OJO: este endpoint devuelve el epoch en MILISEGUNDOS (número), no el ISO
+   * que trae el resto de la API. Verificado contra la sub-cuenta real.
+   * Normalízalo antes de usarlo.
+   */
+  lastMessageDate?: string | number;
+  /** Dirección del ÚLTIMO mensaje. Cuando es "outbound", lastMessageDate ES la fecha del último saliente. */
+  lastMessageDirection?: "inbound" | "outbound";
+  lastManualMessageDate?: string | number;
+  lastOutboundMessageAction?: string;
+  /** Cursor de la API: sort[0] es lastMessageDate en epoch ms. */
+  sort?: Array<number | string>;
+};
+
+export interface GHLConversationSearchResponse {
+  conversations: GHLConversationSearchDoc[];
+  total?: number;
+}
+
+/**
+ * Una página de /conversations/search ordenada por fecha del último mensaje.
+ *
+ * Se pagina por CURSOR (`startAfterDate` = el sort[0] del último documento de
+ * la página anterior), no por offset. Dos conversaciones con el mismo
+ * lastMessageDate al milisegundo pueden repetirse o perderse en el corte: quien
+ * llama debe deduplicar por id de conversación.
+ */
+export async function searchConversationsPage(params: {
+  limit?: number;
+  startAfterDate?: number | string;
+  sortBy?: string;
+  sort?: "asc" | "desc";
+  status?: string;
+}): Promise<GHLConversationSearchResponse> {
+  return ghlFetch<GHLConversationSearchResponse>("/conversations/search", {
+    params: {
+      limit: params.limit ?? 100,
+      sortBy: params.sortBy ?? "last_message_date",
+      sort: params.sort ?? "desc",
+      status: params.status ?? "all",
+      startAfterDate: params.startAfterDate,
+    },
+  });
+}
+
 export interface GHLMessage {
   id: string;
   conversationId: string;

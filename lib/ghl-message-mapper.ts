@@ -58,6 +58,17 @@ const ACTIVITY_BY_TYPE: Record<string, { kind: ActivityKind; label: string }> = 
   TYPE_ACTIVITY_WHATSAPP: { kind: "other", label: "Actividad de WhatsApp" },
 }
 
+/**
+ * ¿El mensaje es actividad del sistema (un chip de "oportunidad actualizada",
+ * "cita registrada"…) en vez de un mensaje a una persona?
+ *
+ * Existe para que quien mide "cuándo fue la última vez que le escribimos" no
+ * cuente un evento automático como si alguien hubiera contactado al lead.
+ */
+export function isActivityMessage(m: { messageType?: string }): boolean {
+  return Boolean(m.messageType && m.messageType in ACTIVITY_BY_TYPE)
+}
+
 export function ghlMessageToInternal(
   m: GHLMessage,
   contactId: string,
