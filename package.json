@@ -18,6 +18,7 @@
     "verify:lost-matrix": "tsx scripts/verify-lost-matrix.ts",
     "verify:advisors": "tsx scripts/verify-advisors.ts",
     "verify:filters": "tsx scripts/verify-panel-filters.ts",
+    "verify:task-backlog": "tsx scripts/verify-task-backlog.ts",
     "add-client": "tsx scripts/add-client.ts"
   },
   "dependencies": {
