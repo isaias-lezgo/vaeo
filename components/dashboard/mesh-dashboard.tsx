@@ -11,6 +11,7 @@ import type {
   Message,
 } from "@/lib/types"
 import type { ResolvedDateRange } from "@/lib/date-range"
+import type { ActivityStatus } from "@/hooks/use-conversation-activity"
 import { DashboardShell } from "./dashboard-ui"
 import { SalesPivotTable } from "./sales-pivot-table"
 import { SalesByDimensionChart } from "./sales-by-dimension-chart"
@@ -18,6 +19,7 @@ import { OpportunityStatusChart } from "./opportunity-status-chart"
 import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
 import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
 import { AdvisorStageTable } from "./advisor-stage-table"
+import { StaleOpportunityMatrix } from "./stale-opportunity-matrix"
 import { TaskBacklogChart } from "./task-backlog-chart"
 import { LostReasonMatrix } from "./lost-reason-matrix"
 
@@ -53,6 +55,11 @@ export interface MeshDashboardProps {
    * pero quedó fuera de un filtro. No la uses para agregar nada.
    */
   unfilteredOpportunities?: Opportunity[]
+  /** Contacto → ISO del último mensaje saliente. Ausente = sin dato = cubeta más profunda. */
+  conversationActivity?: Map<string, string | null>
+  /** El mapa vacío NO significa "nadie escribió": hasta "ready" no se pinta la matriz. */
+  activityStatus?: ActivityStatus
+  onRetryActivity?: () => void
   calls?: Call[]
   messages?: Message[]
   /** Unfiltered messages — lookup table for conversation drawers. */
@@ -84,6 +91,9 @@ export function MeshDashboard({
   tasks = [],
   allTasks = [],
   unfilteredOpportunities = [],
+  conversationActivity,
+  activityStatus = "loading",
+  onRetryActivity,
   calls = [],
   allPautas = [],
   appointments = [],
@@ -133,6 +143,12 @@ export function MeshDashboard({
       <OpportunityStatusChart {...shared} />
       <OpportunityWinRateChart {...shared} />
       <AdvisorStageTable {...shared} />
+      <StaleOpportunityMatrix
+        {...shared}
+        conversationActivity={conversationActivity}
+        activityStatus={activityStatus}
+        onRetryActivity={onRetryActivity}
+      />
       <TaskBacklogChart
         {...shared}
         allTasks={allTasks}

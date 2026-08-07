@@ -40,6 +40,7 @@ import { LoadingScreen } from "@/components/dashboard/loading-screen"
 import { SyncWarningBanner } from "@/components/dashboard/sync-warning-banner"
 import { useDashboardData } from "@/hooks/use-dashboard-data"
 import { useConversationsData } from "@/hooks/use-conversations-data"
+import { useConversationActivity } from "@/hooks/use-conversation-activity"
 import {
   Building2,
   MapPin,
@@ -105,6 +106,14 @@ export default function DashboardPage() {
   const { data, isLoading, isError, progress, locationName, steps, elapsedMs, stalled, refresh } =
     useDashboardData({})
   const { messages } = useConversationsData()
+  // Actividad de conversaciones para la matriz de abandono. Va aparte del sync
+  // principal (es un recorrido de miles de conversaciones) y su ESTADO viaja
+  // con ella: con el mapa vacío la matriz acusaría abandono total.
+  const {
+    activity: conversationActivity,
+    status: activityStatus,
+    refresh: refreshActivity,
+  } = useConversationActivity()
 
   const [dateFilter, setDateFilter] = useState<DateFilter>({ preset: "all" })
   const dateRange = useMemo(() => resolveDateRange(dateFilter), [dateFilter])
@@ -508,6 +517,9 @@ export default function DashboardPage() {
             tasks={tasks}
             allTasks={data?.tasks ?? []}
             unfilteredOpportunities={data?.opportunities ?? []}
+            conversationActivity={conversationActivity}
+            activityStatus={activityStatus}
+            onRetryActivity={refreshActivity}
             calls={calls}
             messages={filteredMessages}
             allMessages={messages}
@@ -532,6 +544,9 @@ export default function DashboardPage() {
             tasks={tasks}
             allTasks={data?.tasks ?? []}
             unfilteredOpportunities={data?.opportunities ?? []}
+            conversationActivity={conversationActivity}
+            activityStatus={activityStatus}
+            onRetryActivity={refreshActivity}
             calls={calls}
             messages={filteredMessages}
             allMessages={messages}
