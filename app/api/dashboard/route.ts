@@ -590,9 +590,19 @@ export async function GET() {
               runDataset("appointments", send, async () =>
                 asPaged(await fetchAppointments(userMap))
               ),
-              runDataset("tasks", send, async () =>
-                asPaged((await searchLocationTasks()).map(transformTask))
-              ),
+              runDataset("tasks", send, async () => {
+                const { tasks, truncated } = await searchLocationTasks();
+                const records = tasks.map(transformTask);
+                // `missingPages` no vacío es lo que hace que runDataset marque el
+                // paso como "partial" y que la ruta emita el warning ámbar. No se
+                // sabe CUÁNTAS faltan (el endpoint no reporta total), así que va
+                // sin `total` y el banner omite el "de ~N".
+                return {
+                  records,
+                  missingPages: truncated ? [1] : [],
+                  missingEstimate: 0,
+                };
+              }),
             ]);
 
           const contactsRaw = contactsOut.records;

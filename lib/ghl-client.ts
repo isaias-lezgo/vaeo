@@ -723,18 +723,21 @@ async function paginateTasks(filters: {
   completed: boolean;
   assignedTo?: string[];
   query?: string;
-}, cap: number): Promise<GHLTask[]> {
+}, cap: number): Promise<{ tasks: GHLTask[]; truncated: boolean }> {
   const limit = 100;
   const all: GHLTask[] = [];
   let skip = 0;
   while (true) {
     const res = await fetchTaskPage(filters, skip, limit);
     all.push(...res.tasks);
-    if (res.tasks.length < limit) break;
+    // Página corta = se acabaron los datos. Esta es la ÚNICA salida limpia.
+    if (res.tasks.length < limit) return { tasks: all, truncated: false };
     skip += limit;
-    if (all.length >= cap) break;
+    // Salir por el tope significa que quedaron tareas sin traer, y el llamador
+    // tiene que poder decirlo: un gráfico de rezago que subcuenta en silencio
+    // da una respuesta tranquilizadora y falsa.
+    if (all.length >= cap) return { tasks: all, truncated: true };
   }
-  return all;
 }
 
 // GHL's task search endpoint requires `completed` to be explicitly set —
@@ -744,7 +747,7 @@ export async function searchLocationTasks(filters: {
   completed?: boolean;
   assignedTo?: string[];
   query?: string;
-} = {}): Promise<GHLTask[]> {
+} = {}): Promise<{ tasks: GHLTask[]; truncated: boolean }> {
   const CAP = 500;
 
   if (filters.completed !== undefined) {
@@ -756,7 +759,10 @@ export async function searchLocationTasks(filters: {
     paginateTasks({ ...rest, completed: false }, CAP),
     paginateTasks({ ...rest, completed: true }, CAP),
   ]);
-  return [...pending, ...done];
+  return {
+    tasks: [...pending.tasks, ...done.tasks],
+    truncated: pending.truncated || done.truncated,
+  };
 }
 
 // ============ NOTES ============
