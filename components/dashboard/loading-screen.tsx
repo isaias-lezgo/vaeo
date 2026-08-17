@@ -13,6 +13,12 @@ interface LoadingScreenProps {
   elapsedMs?: number
   /** No step frame has arrived in >15s — the API is throttling us. */
   stalled?: boolean
+  /**
+   * True once a `step` frame has arrived, which only happens on a live GHL sync.
+   * Picks between the two faces below. See `liveSync` in use-dashboard-data.ts
+   * for why a step frame is the only trustworthy signal.
+   */
+  liveSync?: boolean
 }
 
 // Visible rows, in display order, with their Spanish labels. These mirror the
@@ -204,13 +210,64 @@ function StepRow({
   )
 }
 
-export function LoadingScreen({
+/**
+ * La cara del camino caliente: el payload viene del caché en Postgres, así que
+ * no hay progreso que reportar — llega un único frame `data` y se acabó.
+ *
+ * Deliberadamente desnuda. Esta pantalla dura uno o dos segundos, y en ese lapso
+ * las seis filas de datasets no alcanzan a decir nada: se quedaban congeladas en
+ * gris al 0% y luego saltaba el panel, que leía como si algo se hubiera trabado.
+ * Un porcentaje que nunca se mueve es peor que ningún porcentaje.
+ */
+function CacheFace() {
+  return (
+    <div className="flex w-full max-w-md flex-col items-center gap-8 px-8">
+      <SyncRing />
+
+      <div className="flex flex-col items-center gap-5">
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">
+          Lezgo Suite Analíticas
+        </h2>
+
+        {/* Indeterminado a propósito: no sabemos cuánto falta y fingirlo con una
+            barra determinada sería mentir. */}
+        <div className="h-1.5 w-48 overflow-hidden rounded-full bg-border" aria-hidden>
+          <motion.div
+            className="h-full w-1/3 rounded-full bg-primary"
+            animate={{ x: ["-100%", "300%"] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+          />
+        </div>
+      </div>
+
+      {/* El contenedor es aria-live, así que necesita algo que anunciar: esta
+          cara no tiene texto de estado visible. */}
+      <span className="sr-only">Cargando panel</span>
+    </div>
+  )
+}
+
+/**
+ * La cara del camino frío: un sync real contra GHL, que tarda del orden de un
+ * minuto y medio. Aquí el detalle por dataset sí se gana su lugar — es la
+ * diferencia entre "va avanzando" y "se trabó".
+ *
+ * Se ve en la primera carga, cuando la base no responde, y cada vez que se pica
+ * "Actualizar" (que manda `?fresh=1`).
+ */
+function SyncFace({
   progress,
   locationName,
   steps,
-  elapsedMs = 0,
-  stalled = false,
-}: LoadingScreenProps) {
+  elapsedMs,
+  stalled,
+}: {
+  progress: string
+  locationName?: string
+  steps?: StepMap
+  elapsedMs: number
+  stalled: boolean
+}) {
   const resolved = steps ?? FALLBACK_STEPS
 
   const total = STEP_ROWS.length
@@ -227,21 +284,7 @@ export function LoadingScreen({
   }
 
   return (
-    <motion.div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background"
-      // Opaque from the first frame (no enter fade) so the empty dashboard
-      // behind it never shows through on initial load / after login. The exit
-      // fade still plays to reveal the populated dashboard once data arrives.
-      initial={false}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.25 }}
-      role="status"
-      aria-live="polite"
-      aria-busy="true"
-    >
-      <div className="absolute inset-x-0 top-0 h-0.5 bg-primary/80" />
-
+    <>
       <div className="flex w-full max-w-md flex-col items-center gap-10 px-8">
         <SyncRing />
 
@@ -336,6 +379,9 @@ export function LoadingScreen({
         </div>
       </div>
 
+      {/* Ancla contra el overlay fijo de LoadingScreen, que es el ancestro
+          posicionado más cercano — por eso esta cara devuelve un fragmento y no
+          un div propio. */}
       <motion.div
         className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-border"
         initial={{ opacity: 0 }}
@@ -348,6 +394,51 @@ export function LoadingScreen({
           transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
         />
       </motion.div>
+    </>
+  )
+}
+
+export function LoadingScreen({
+  progress,
+  locationName,
+  steps,
+  elapsedMs = 0,
+  stalled = false,
+  liveSync = false,
+}: LoadingScreenProps) {
+  return (
+    <motion.div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background"
+      // Opaque from the first frame (no enter fade) so the empty dashboard
+      // behind it never shows through on initial load / after login. The exit
+      // fade still plays to reveal the populated dashboard once data arrives.
+      initial={false}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.25 }}
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-primary/80" />
+
+      {/* El overlay, la línea de arriba y el fade de salida son los mismos en
+          ambos caminos: cambiar de cara solo cambia el contenido de adentro, así
+          que la escalada a sync en vivo no parpadea ni remonta la pantalla.
+          Condicional plano en vez de AnimatePresence mode="wait" — ver el
+          comentario de la píldora de subcuenta: una animación de repetición
+          infinita nunca dispara el callback de exit y deja el swap trabado. */}
+      {liveSync ? (
+        <SyncFace
+          progress={progress}
+          locationName={locationName}
+          steps={steps}
+          elapsedMs={elapsedMs}
+          stalled={stalled}
+        />
+      ) : (
+        <CacheFace />
+      )}
     </motion.div>
   )
 }

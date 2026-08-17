@@ -51,9 +51,14 @@ export interface TaskBacklog {
   /** Fila de totales por cubeta; `advisor` vale "Total". */
   totals: TaskBacklogRow
   /**
-   * Tareas de contactos SIN ninguna oportunidad en el dataset. No se tiran —
-   * son la misma fuga que vigila la tarjeta "Contactos sin oportunidad" — pero
-   * quedan fuera del agregado, porque no hay dato que las atribuya a una línea.
+   * Tareas que ninguna oportunidad puede atribuir a una línea de negocio. Dos
+   * casos caen aquí y NO son lo mismo: el contacto existe pero no tiene ninguna
+   * oportunidad (la fuga que vigila "Contactos sin oportunidad"), o la tarea
+   * viene SIN `contactId` — GHL lo permite, y entonces `contactIds` queda vacío
+   * aunque `count` sea mayor que cero. Quien consuma esta celda debe drillar por
+   * `taskIds`, no por `contactIds`, o perderá el segundo caso en silencio.
+   *
+   * No se tiran: quedan fuera del agregado porque no hay dato que las atribuya.
    */
   unscoped: TaskBacklogCell
   grandTotal: number

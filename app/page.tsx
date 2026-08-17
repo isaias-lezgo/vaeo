@@ -94,17 +94,56 @@ function toMenuOptions(
   }))
 }
 
+/**
+ * Antigüedad en tiempo relativo. El panel se sirve de un caché en Postgres, así
+ * que lo que está en pantalla puede tener minutos u horas: una hora de reloj
+ * ("Actualizado 09:14") no dice si eso es de hoy temprano o de anteayer, y un
+ * caché sin antigüedad visible miente por omisión.
+ *
+ * `_tick` no se usa dentro: existe solo para que React vuelva a llamar a esta
+ * función cada minuto (ver el intervalo en el componente).
+ */
+function relativeAge(fetchedAt: string, _tick: number): string {
+  const mins = Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 60000)
+  if (mins < 1) return "hace un momento"
+  if (mins === 1) return "hace 1 minuto"
+  if (mins < 60) return `hace ${mins} minutos`
+  const hrs = Math.floor(mins / 60)
+  if (hrs === 1) return "hace 1 hora"
+  if (hrs < 24) return `hace ${hrs} horas`
+  const days = Math.floor(hrs / 24)
+  return days === 1 ? "hace 1 día" : `hace ${days} días`
+}
+
 export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
   const [activeTab, setActiveTab] = useState<DashboardTab>("vaeo")
+  // El texto "Actualizado hace X" es relativo, así que tiene que re-renderizarse
+  // solo; nada más en la página cambia para obligarlo.
+  const [nowTick, setNowTick] = useState(0)
 
   useEffect(() => { setMounted(true) }, [])
 
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
   useEffect(() => { document.title = TAB_TITLES[activeTab] }, [activeTab])
 
-  const { data, isLoading, isError, progress, locationName, steps, elapsedMs, stalled, refresh } =
-    useDashboardData({})
+  const {
+    data,
+    isLoading,
+    isError,
+    progress,
+    locationName,
+    steps,
+    elapsedMs,
+    stalled,
+    liveSync,
+    refresh,
+  } = useDashboardData({})
   const { messages } = useConversationsData()
   // Actividad de conversaciones para la matriz de abandono. Va aparte del sync
   // principal (es un recorrido de miles de conversaciones) y su ESTADO viaja
@@ -278,6 +317,7 @@ export default function DashboardPage() {
           steps={steps}
           elapsedMs={elapsedMs}
           stalled={stalled}
+          liveSync={liveSync}
         />
       )}
     </AnimatePresence>
@@ -296,7 +336,6 @@ export default function DashboardPage() {
             />
             <div className="min-w-0">
               <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight">Lezgo Suite Analíticas</h1>
-              <p className="text-[11px] font-medium tracking-wide text-white/55">VAEO y MESH</p>
             </div>
             {locationName && (
               <>
@@ -354,7 +393,7 @@ export default function DashboardPage() {
               {isLoading
                 ? (progress || "Sincronizando…")
                 : data?.meta?.fetchedAt
-                  ? `Actualizado ${new Date(data.meta.fetchedAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}`
+                  ? `Actualizado ${relativeAge(data.meta.fetchedAt, nowTick)}`
                   : ""}
             </span>
             
@@ -417,11 +456,11 @@ export default function DashboardPage() {
         <div className="flex gap-6 sm:gap-8">
           {(
             [
-              { id: "vaeo" as const, label: "VAEO", icon: Building2 },
-              { id: "mesh" as const, label: "MESH", icon: Network },
-              { id: "conversations" as const, label: "Asistente IA", icon: Sparkles },
+              { id: "vaeo" as const, label: "VAEO", icon: Building2, mark: "/vaeo-mark.png" },
+              { id: "mesh" as const, label: "MESH", icon: Network, mark: "/mesh-mark.png" },
+              { id: "conversations" as const, label: "Asistente IA", icon: Sparkles, mark: null },
             ] as const
-          ).map(({ id, label, icon: Icon }) => {
+          ).map(({ id, label, icon: Icon, mark }) => {
             const active = activeTab === id
             return (
               <button
@@ -433,7 +472,21 @@ export default function DashboardPage() {
                   active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                {mark ? (
+                  <Image
+                    src={mark}
+                    alt=""
+                    width={60}
+                    height={60}
+                    aria-hidden
+                    className={cn(
+                      "h-4 w-4 shrink-0 object-contain transition-opacity duration-200",
+                      active ? "opacity-100" : "opacity-60",
+                    )}
+                  />
+                ) : (
+                  <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                )}
                 {label}
                 {active && (
                   <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-primary" />

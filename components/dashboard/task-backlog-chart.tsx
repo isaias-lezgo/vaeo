@@ -91,8 +91,9 @@ export interface TaskBacklogChartProps {
  *
  * Las tareas de GHL no traen opportunityId, así que el reparto por línea de
  * negocio va contacto → sus oportunidades → embudo. Un contacto con
- * oportunidades en las dos líneas pone su tarea en los dos paneles; uno sin
- * ninguna oportunidad va a la nota de abajo, fuera del agregado.
+ * oportunidades en las dos líneas pone su tarea en los dos paneles; la tarea que
+ * no se puede atribuir va a la nota de abajo, fuera del agregado — sea porque su
+ * contacto no tiene ninguna oportunidad, o porque la tarea no trae contacto.
  */
 export function TaskBacklogChart({
   panel,
@@ -144,6 +145,29 @@ export function TaskBacklogChart({
     () => new Map((allContacts.length > 0 ? allContacts : contacts).map((c) => [c.id, c])),
     [allContacts, contacts]
   )
+
+  const taskById = useMemo(() => new Map(allTasks.map((t) => [t.id, t])), [allTasks])
+
+  /**
+   * Drill de TAREAS. Es el que usa la nota al pie, y no puede ser el de
+   * contactos: sus tareas son justamente las que no tienen a quién resolver —
+   * una tarea de GHL puede venir sin `contactId`, y `openDrill` las descartaba
+   * en silencio, dejando la nota clickeable pero muerta.
+   */
+  const openTaskDrill = (cell: TaskBacklogCell, title: string, note: string) => {
+    if (cell.count === 0) return
+    const taskItems = cell.taskIds
+      .map((id) => taskById.get(id))
+      .filter((t): t is Task => Boolean(t))
+    if (taskItems.length === 0) return
+    setDrill({
+      open: true,
+      title,
+      subtitle: note,
+      opportunities: [],
+      taskItems,
+    })
+  }
 
   const openDrill = (cell: TaskBacklogCell, title: string, note: string) => {
     if (cell.count === 0) return
@@ -300,23 +324,24 @@ export function TaskBacklogChart({
               <button
                 type="button"
                 onClick={() =>
-                  openDrill(
+                  openTaskDrill(
                     backlog.unscoped,
-                    "Tareas de contactos sin oportunidad",
-                    `${n(backlog.unscoped.count)} tareas pendientes`
+                    "Tareas sin línea de negocio",
+                    `${n(backlog.unscoped.count)} ${
+                      backlog.unscoped.count === 1 ? "tarea pendiente" : "tareas pendientes"
+                    }`
                   )
                 }
                 className={cn(
-                  "mt-2 text-left text-[11px] underline-offset-2 hover:underline",
+                  "mt-2 cursor-pointer text-left text-[11px] underline-offset-2 hover:underline",
                   MISSING_TEXT
                 )}
               >
                 {n(backlog.unscoped.count)}{" "}
-                {backlog.unscoped.count === 1 ? "tarea pendiente" : "tareas pendientes"} de
-                contactos sin ninguna oportunidad — no se{" "}
-                {backlog.unscoped.count === 1 ? "puede" : "pueden"} atribuir a una línea de
-                negocio y {backlog.unscoped.count === 1 ? "queda" : "quedan"} fuera del
-                gráfico.
+                {backlog.unscoped.count === 1 ? "tarea pendiente" : "tareas pendientes"} sin
+                oportunidad que {backlog.unscoped.count === 1 ? "la" : "las"} ubique en una
+                línea de negocio —{" "}
+                {backlog.unscoped.count === 1 ? "queda" : "quedan"} fuera del gráfico.
               </button>
             )}
           </>

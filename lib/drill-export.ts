@@ -1,5 +1,5 @@
 // Builds the CSV for the chart drill drawer's "Exportar" button. The drawer
-// renders one of four content modes (members / contacts / pautas /
+// renders one of five content modes (members / contacts / pautas / tasks /
 // opportunities); this mirrors that same selection so the exported file matches
 // exactly what the drawer is showing. Joins resolve against the drawer's own
 // props (contacts lookup), the same data the UI renders from.
@@ -44,6 +44,8 @@ export function buildDrillExport(drill: DrillState, contacts: Contact[]): DrillE
   const showMembers = (drill.members?.length ?? 0) > 0
   const showContacts = !showMembers && (drill.contactItems?.length ?? 0) > 0
   const showPautas = !showMembers && !showContacts && (drill.pautaItems?.length ?? 0) > 0
+  const showTasks =
+    !showMembers && !showContacts && !showPautas && (drill.taskItems?.length ?? 0) > 0
 
   let mode: string
   let headers: string[]
@@ -97,6 +99,22 @@ export function buildDrillExport(drill: DrillState, contacts: Contact[]): DrillE
       tieneContacto: contact ? "sí" : "no",
       creado: pauta.createdAt ?? "",
     }))
+  } else if (showTasks) {
+    mode = "tareas"
+    headers = ["tarea", "contacto", "asignado", "vence", "estatus", "detalle"]
+    rows = drill.taskItems!.map((t) => {
+      const contact = t.contactId ? contacts.find((c) => c.id === t.contactId) : undefined
+      return {
+        tarea: t.title ?? "",
+        // Vacío cuando la tarea no trae contacto — es un dato ausente, no un
+        // nombre que el CSV deba inventar.
+        contacto: contact?.name ?? t.contactName ?? "",
+        asignado: t.assignedToName ?? "",
+        vence: t.dueDate ?? "",
+        estatus: t.status,
+        detalle: t.body ?? "",
+      }
+    })
   } else {
     mode = "oportunidades"
     headers = [

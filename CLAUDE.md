@@ -68,7 +68,11 @@ pnpm verify:filters      # lib/panel-filters.ts — filtros globales de sucursal
 pnpm verify:category-filter # lib/category-filter.ts — opciones de origen/canal SIN agrupar grafías
 pnpm verify:task-backlog # lib/task-backlog.ts — cubetas de vencimiento por zona horaria
 pnpm verify:stale-matrix # lib/stale-opportunity-matrix.ts — cubetas de abandono en ambos ejes
+pnpm verify:sync-store   # lib/sync-store.ts — gzip roundtrip, aislamiento por cliente, el candado
 npx tsc --noEmit         # REQUIRED: next build ignores TS errors, so a green build proves nothing
+
+# Caché de sincronización (Neon)
+pnpm db:migrate          # crea project_sync — idempotente, va por DATABASE_URL_UNPOOLED
 ```
 
 `pnpm lint` is broken and has been for a while — `eslint` is not actually a dependency of
@@ -114,6 +118,11 @@ Required vars in `.env.local`:
   and `analyze-contact`
 - `GHL_API_TOKEN` / `GHL_LOCATION_ID` — **not read by the app.** Kept only so the dev
   GHL MCP server (`.mcp.json`) can point at one sub-account.
+
+Optional (the sync cache — see "Caché de sincronización" below):
+- `DATABASE_URL` / `DATABASE_URL_UNPOOLED` — injected by the Neon integration on Vercel;
+  `vercel env pull .env.local` brings them down locally. **Absent = the app behaves
+  exactly as it did before the cache existed**, doing a full GHL sync on every load.
 
 All are server-side only. `DASHBOARD_CLIENTS` is read in `lib/clients.ts`;
 `DASHBOARD_AUTH_SECRET` in `lib/auth.ts`, `app/api/auth/login/route.ts`, and
@@ -222,7 +231,7 @@ that differs between the two lines as well. `resolvePipelineId()` matches the pi
     corre flujos de Make y un bot de WhatsApp, y cada escritura automática empuja
     `updatedAt` (medido: 7-9 min por delante de `createdAt` en oportunidades que nadie
     tocó); un gráfico basado en él reportaría que todo se está trabajando.
-- Deleted with them (recoverable from git history / `upstream`): `campaign-activity-chart.tsx`, `decision-cycle-table.tsx`, `origen-de-lead-criteria.tsx`. Still present and reusable: `chart-drill-drawer.tsx` (also used by the AI assistant), `detail-drawer.tsx`, `appointment-drill-drawer.tsx`, `export-report-button.tsx`, and all of `dashboard-ui.tsx`.
+- Charts the shared panel had and this fork deleted are recoverable from git history / `upstream` — check there before rebuilding one from scratch.
 - The third tab (`DashboardTab` id `"conversations"`, labelled **"Asistente IA"**) renders `conversations-chat.tsx`. It is **permanently mounted and merely hidden** when inactive, so the chat history survives tab switches — do not make it conditional. It always sees the full, unfiltered dataset.
 - Both dashboards can **export a branded PDF report** of their own charts (see "PDF report export").
 
@@ -233,6 +242,12 @@ browser → middleware.ts (verifies the signed dash_session cookie)
     ↓
 app/api/dashboard/route.ts
     ↓  requireClient()  → resolves the cookie's client id to a ClientConfig (lib/session.ts)
+    ↓  readSync(client)  → lib/sync-store.ts → Neon
+    ├─ HAY caché y no viene ?fresh=1 → manda UN frame `data` y termina (0.8-2.4 s).
+    │    Si pasó de 15 min, after(() => refreshInBackground()) corre el sync
+    │    DESPUÉS de que la respuesta salió; el usuario nunca lo espera.
+    └─ NO hay caché (o ?fresh=1, o Postgres no responde) → sync en vivo ↓
+    ↓  lib/sync.ts  syncProject(client, send?)  ← la MISMA función en ambos caminos
     ↓  withClient(...)  → establishes the per-request credential context (lib/ghl-context.ts)
     ↓
 lib/ghl-client.ts  (raw GHL types + fetch helpers; reads token+location from the context)
@@ -249,51 +264,63 @@ app/page.tsx  (tab state, date-filter state, applies the client-side date-range 
 components/dashboard/{marketing,sales}-dashboard.tsx
 ```
 
-Beyond that main sync, the app has these routes. Every one that touches GHL runs through
-`requireClient()` + `withClient()`; the ones marked **no GHL** work off data the browser
-already holds and need only the middleware gate:
+Beyond that main sync, the app has other routes under `app/api/`. **Every one that touches
+GHL must run through `requireClient()` + `withClient()`**; the ones that work off data the
+browser already holds (`chat`, `analyze-report`, `attachments/process`) need only the
+middleware gate.
 
-| Route | Purpose |
-|---|---|
-| `dashboard` | the main NDJSON sync above |
-| `dashboard-messages` | NDJSON stream of conversation messages, loaded separately from the main sync |
-| `conversations` | on-demand full message threads for a batch of contacts |
-| `contact-notes` / `contact-tasks` | per-contact detail, fetched live when a drawer opens |
-| `analyze-contact` | Anthropic call summarizing one contact (does read GHL for the opportunity) |
-| `chat` | one Anthropic turn for the AI assistant — **no GHL** |
-| `analyze-report` | Anthropic pass writing the PDF report's analyses — **no GHL** |
-| `attachments/process` | parses an uploaded PDF/CSV/Excel for the assistant — **no GHL** |
-| `auth/login` / `auth/logout` | session cookie |
+### Caché de sincronización (Neon Postgres)
 
-Client-side data hooks mirror this: `use-dashboard-data.ts` (main sync),
-`use-conversations-data.ts` (messages), `use-agent-loop.ts` (the AI agent loop), all
-built on `fetch-stream.ts` for the NDJSON routes.
+Un sync completo contra GHL tarda decenas de segundos; con el caché la carga normal baja
+a un par. La ruta lee una fila de `project_sync` con el payload ya armado, la manda, y
+**si el dato pasó de 15 min dispara el refresco DESPUÉS de responder** (`after()` de
+`next/server`). El usuario nunca espera al refresco.
+
+- **`lib/db.ts`** es lo único que sabe que la base es Neon. `getSql()` es perezoso a
+  propósito: importar el módulo sin `DATABASE_URL` — un verify script, un paso de build —
+  no debe tronar, y `neon()` truena con una URL vacía.
+- **`lib/sync-store.ts`** — `readSync` / `writeSync` / `claimSync` / `releaseSync` /
+  `isStale`. Una tabla, `bytea` + gzip (nunca consultamos dentro del payload, lo mandamos
+  entero). El caché es **desechable**: se sobrescribe entero, guarda solo el presente, y
+  si se borra la tabla se rellena sola. Esa propiedad es lo que lo mantiene en una tabla
+  en vez de un esquema y lo que evita acumular datos personales históricos. **No guardes
+  historia aquí.**
+- **`lib/sync.ts`** — `syncProject(client, send?)`. La orquestación salió del route
+  handler precisamente para que la ruta y el refresco en segundo plano llamen al mismo
+  código; dos copias se desincronizan al primer cambio. `send` es opcional porque el
+  refresco no tiene a quién mandarle progreso, y `withClient()` se entra **dentro** de
+  `syncProject`, no alrededor del handler: el stream sigue produciendo frames después de
+  que `GET()` regresó.
+- **Todas las funciones del store reciben el `ClientConfig`, nunca un string.** Leer la
+  fila equivocada renderizaría el panel de A con datos de B — la misma clase de fuga que
+  `lib/ghl-context.ts` existe para evitar.
+- **`claimSync` decide dentro del `WHERE` del UPDATE**, no en TypeScript: un
+  read-then-write dejaría una ventana donde dos peticiones ven el candado libre y ambas
+  sincronizan. El candado se auto-sana a los 10 min. `releaseSync` **no toca el payload**
+  — un refresco fallido debe dejar el último caché bueno donde estaba.
+- **`synced_at` sale del payload (`meta.fetchedAt`), no de `now()`**: registra cuándo se
+  trajo el dato de GHL, que es lo que significa el "Actualizado hace X" del header.
+- **La base NO es una dependencia.** Todo fallo de Postgres se registra y cae al sync en
+  vivo (`readCache` / `saveQuietly` en la ruta). Meter el caché no puede crear una forma
+  nueva de que el panel no cargue. Se prueba apuntando `DATABASE_URL` a un host inválido
+  y confirmando que la app sigue funcionando.
+- **`maxDuration = 300` necesita Fluid Compute encendido** (Settings → Functions). Eso es
+  lo que sube el techo, no el plan. Sin Fluid el techo es 60 s y un refresco cortado a la
+  mitad falla **en silencio**, porque corre después de que la respuesta salió; el síntoma
+  es que el "Actualizado hace X" deja de avanzar.
+- El botón **Actualizar** manda `?fresh=1` (`refresh()` en `use-dashboard-data.ts` va en
+  fresco por defecto); el montaje inicial no, que es el punto de todo esto.
+- **No caches las rutas de detalle** que se piden al abrir un drawer, ni
+  `/api/conversation-activity`. Van a GHL en vivo y ahí está bien.
 
 ### Multi-client (multi-tenancy)
 
-One deployment serves every client. **The password IS the client's identity.**
-
-1. `lib/clients.ts` — the roster, parsed from `DASHBOARD_CLIENTS`. This is the
-   **seam**: nothing downstream knows the roster comes from an env var, so swapping
-   in a database later touches only this file.
-2. Login (`app/api/auth/login/route.ts`) looks the submitted password up across the
-   roster (`findClientByPassword` — constant-time, no early return) and HMAC-signs
-   the matched client's id into the `dash_session` cookie:
-   `<clientId>.<expiryMs>.<hmac>`. The id is inside the signed payload, so a client
-   cannot edit their cookie to reach another client's data.
-3. Every GHL-touching route calls `requireClient()` (`lib/session.ts`), which
-   re-verifies the cookie **itself** — it deliberately does not trust a
-   middleware-injected header, which would be a spoofing surface. Middleware only
-   verifies the signature; resolving the client there would drag the roster into the
-   Edge bundle.
-4. The route runs its GHL work inside `withClient(client, ...)`
-   (`lib/ghl-context.ts`, an `AsyncLocalStorage`). `ghlFetch` reads credentials via
-   `currentClient()`, which is why none of its ~113 exported functions needed a
-   signature change. `currentClient()` **fails closed** — it throws rather than
-   falling back to a default token.
-5. `lib/ghl-limiter.ts` keys the concurrency semaphore, token bucket, and 429
-   cooldown **by location id**, because GHL's budget is per location. Shared, one
-   client's 429 would freeze every other client's sync.
+One deployment serves every client. **The password IS the client's identity.** The full
+mechanism (roster seam, signed cookie, `requireClient()`, the `withClient()`
+AsyncLocalStorage context, per-location limiter keying) is in the **`multi-tenancy`
+skill** — load it before touching `lib/clients.ts`, `lib/auth.ts`, `lib/session.ts`,
+`lib/ghl-context.ts`, `lib/ghl-limiter.ts` or `app/api/auth/*`. The two prohibitions below
+stay here because they must never be out of context:
 
 **NEVER** replace the AsyncLocalStorage context with a module-level "current client"
 variable: one serverless instance serves overlapping requests, so that would
@@ -307,17 +334,6 @@ having nothing extra to manage. The escape hatch is already built in: the option
 `password` field on a client entry overrides the default, so any single client can be
 given a real, rotatable password by adding one line — no migration, no code change.
 Suggest that if a password leaks; don't rewrite the model on your own initiative.
-
-The two streaming routes (`dashboard`, `dashboard-messages`) enter the context
-**inside** the `ReadableStream` `start()` callback — the stream outlives the
-handler's return, so wrapping the handler would leave the pump running outside the
-context.
-
-`app/api/chat` and `app/api/analyze-report` never touch GHL (they work off data the
-browser already holds), so they need no client context — only the middleware gate.
-
-Verification scripts (no test framework in this repo): `pnpm verify:clients`,
-`pnpm verify:auth`, `pnpm verify:limiter`.
 
 ### Loading & progress
 
@@ -336,60 +352,39 @@ The dashboard fetch streams NDJSON progress frames rather than returning a singl
 - `{ type: "progress", message }` — human-readable fallback text.
 - `{ type: "data", ... }` / `{ type: "error", ... }` — terminal frames.
 
+**`loading-screen.tsx` tiene DOS caras, y el interruptor es `liveSync`** (derivado en
+`use-dashboard-data.ts`). El caché cambió lo que significa "cargando":
+
+- **`CacheFace`** — el camino caliente. El payload viene de Postgres, llega un único
+  frame `data` y no hay nada que reportar: anillo, título y una barra indeterminada.
+  Sin filas, sin barra determinada, sin `0%`, sin cronómetro, sin la píldora de
+  subcuenta (en caché tampoco llega frame `location`). Antes se pintaban las seis filas
+  congeladas en gris al 0% por uno o dos segundos, lo que leía como app trabada — **un
+  porcentaje que nunca se mueve es peor que ningún porcentaje.**
+- **`SyncFace`** — el camino frío. Es la pantalla detallada de siempre, intacta. Aquí el
+  sync tarda del orden de minuto y medio y el detalle por dataset sí se gana su lugar.
+
+**La señal es la llegada de un frame `step`, y SOLO esa.** `progress` y `locationName`
+no sirven: `load()` fija el primero en el cliente antes de que la red conteste, y el
+segundo sobrevive de la carga anterior, así que ambos estarían encendidos en los dos
+caminos. Los `step` solo salen del servidor y el camino caliente no emite ninguno.
+
+Ojo con dónde se ve cada una: `app/page.tsx` monta la pantalla solo con
+`isInitialLoad = isLoading && !data`, así que **el botón "Actualizar" nunca la muestra**
+— deja el panel puesto y reporta el progreso en el header. `SyncFace` aparece en la
+primera carga de la sesión cuando no hay fila en caché, o cuando Postgres no responde.
+
 ### AI assistant
 
-The assistant is an **agent loop that runs in the browser**, not on the server.
-
-- `app/api/chat/route.ts` handles exactly **one Anthropic turn per request**. When the
-  model returns `tool_use` blocks the server just returns them; `hooks/use-agent-loop.ts`
-  executes the tools locally and POSTs back with `tool_result` blocks. The server holds
-  **no session state** between turns.
-- `lib/ai-tools.ts` — the ~25 `TOOL_DEFINITIONS` and their executor. Most tools
-  (`search_*`, `aggregate`, `relate`, `get_*`) run **against the dataset the browser
-  already holds** — no extra GHL calls. The exceptions reach back through
-  `lib/ghl-fetchers.ts` for data not in the initial sync: `get_contact_messages`,
-  `search_conversations`, `get_contact_tasks`, `get_contact_notes`.
-- UI-side tools: `render_chart` → `chat-chart.tsx`, `ask_user` → `chat-question.tsx`,
-  `show_in_panel` → the conversations context panel, `create_pdf` / `export_csv` →
-  direct browser downloads.
-- `lib/conversations-panel.ts` holds the context panel's logic (extracted from the
-  component so it stays testable-by-inspection): the **urgency buckets** are derived from
-  the last message only — inbound and unanswered for >72 h = `red`, 24–72 h = `yellow`,
-  under 24 h = `grey`; anything the team already replied to is `grey`. Contacts sort by
-  bucket, then oldest-activity-first inside a bucket.
-- `lib/ai-context.ts` — the Spanish system prompt. It carries hard-won behavioral rules
-  (date-window consistency, never concluding from a truncated message sample, `lostReason`
-  being a native field, never printing IDs). **Treat those numbered rules as regression
-  fixes, not prose** — each one exists because the model got it wrong. Don't trim them
-  for brevity.
-- `lib/ai-index.ts` — `buildChatIndex()` precomputes the by-contact lookup maps
-  (`oppsByContact`, `pautasByContact`, `pautaNameByContact`, …), cached on the contacts
-  array reference so it survives within a single agent run.
-- `datasetSummary` is built once on the client and pinned for **prompt caching**; keep
-  it stable across turns in a session or the cache key breaks.
-- **Timezone**: the browser's IANA zone is posted as `userTimezone` on every `chat` and
-  `analyze-contact` call; both routes fall back to `America/Mexico_City`. Dates rendered
-  into a prompt must go through that zone — the server runs in UTC on Vercel, so
-  formatting a timestamp without it shifts "yesterday" by a day for the client.
-
-#### File attachments
-
-Users can drop PDF / CSV / Excel files into the assistant composer.
-
-- `app/api/attachments/process/route.ts` parses uploads server-side (`unpdf` for PDF,
-  `xlsx` for tabular) into `ProcessedAttachment` objects. It touches no GHL. Limits:
-  32 MB PDF, 25 MB tabular; each Excel sheet becomes its own table.
-- **PDF text-vs-visual fallback**: if extracted text is under `MIN_PDF_TEXT` (40
-  non-whitespace chars) the PDF is assumed scanned and re-sent as a native base64
-  document block for Claude to read visually, instead of as text.
-- **Tabular files are never pasted into the prompt.** Only a summary (schema, row count,
-  8 sample rows, per-column stats from `buildTableSummary`) goes to the model; the full
-  rows stay in the browser in `uploadedTablesRef` (`hooks/use-agent-loop.ts`) and are
-  queried through the `list_uploaded_files` / `query_uploaded_table` /
-  `join_uploaded_table` tools, executed locally by `lib/attachment-tools.ts`. Keep it that
-  way — a spreadsheet inlined into the prompt blows the context and the cache.
-- `lib/attachments.ts` stays framework-free (shared by the route and the verify script);
-  the client-only file reading lives in the composer.
+The assistant is an **agent loop that runs in the browser**, not on the server:
+`app/api/chat/route.ts` handles one Anthropic turn per request and holds no session
+state; `hooks/use-agent-loop.ts` executes the ~25 tools locally and POSTs back
+`tool_result` blocks. Users can also drop PDF / CSV / Excel files into the composer.
+Full details — tool inventory, the Spanish system prompt's regression rules, prompt
+caching, timezone handling, and the attachment pipeline — are in the **`ai-assistant`
+skill**. Load it before touching `app/api/chat`, `hooks/use-agent-loop.ts`,
+`lib/ai-*.ts`, `lib/conversations-panel.ts`, `lib/attachments.ts` or
+`app/api/attachments/process`.
 
 ### Shared domain rules (single sources of truth)
 
@@ -448,23 +443,13 @@ the marketing charts and the AI tools. Do not re-inline this logic anywhere.
 
 ### PDF report export
 
-Both dashboards export a branded PDF via `components/dashboard/export-report-button.tsx`.
-
-- `lib/report.ts` composes a `ReportInput` (KPIs + `ReportSection[]`) from the dashboard's
-  **already-computed aggregates** — deterministic code, not the model.
-- `app/api/analyze-report/route.ts` then makes one Haiku pass that writes an executive
-  summary plus one analysis per section. Sections are analyzed **by default**; `ai: false`
-  opts out. Token budget is sized to the section count (~13 marketing / ~8 ventas) — if you
-  add sections, check it still fits.
-- `lib/pdf/*` renders the spec with pdfmake: `build-pdf.ts` (doc definition — **LETTER
-  landscape**, 712pt usable width), `charts.ts` (hand-drawn canvas charts), `blocks.ts`
-  (tables/KPIs), `branding.ts` (palette, `sanitizeBrand`).
-- The same `create_pdf` spec/renderer backs the AI assistant's PDF tool, so both outputs
-  share one format. Changing `lib/pdf/*` affects both.
-- **Brand rule**: `sanitizeBrand()` strips "GoHighLevel"/"GHL" from all rendered text —
-  the platform is presented as "Lezgo Suite CRM". The AI prompts carry the same rule.
-- pdfmake **cannot render in a bare Node harness** — verify PDF changes by building and
-  driving the real app.
+Both dashboards export a branded PDF via `components/dashboard/export-report-button.tsx`;
+the same `create_pdf` spec/renderer backs the AI assistant's PDF tool, so changing
+`lib/pdf/*` affects both. **Brand rule**: `sanitizeBrand()` strips "GoHighLevel"/"GHL"
+from all rendered text — the platform is presented as "Lezgo Suite CRM", and the AI
+prompts carry the same rule. Everything else — `lib/report.ts`, the `analyze-report`
+Haiku pass and its token budget, the pdfmake renderers — is in the **`pdf-report`
+skill**.
 
 ### Key design decisions
 
@@ -524,28 +509,15 @@ Both dashboards export a branded PDF via `components/dashboard/export-report-but
 
 ### Internal type system
 
-`lib/types.ts` defines the canonical internal types (`Contact`, `Opportunity`, `Pauta`, `Appointment`, `Call`, `Task`, `Message`, `Pipeline`). The API route transforms raw GHL shapes into these before returning JSON. Always work against the internal types in components — never import from `lib/ghl-client.ts` on the client side.
+`lib/types.ts` defines the canonical internal types; the API route transforms raw GHL shapes into these before returning JSON. Always work against the internal types in components — **never import from `lib/ghl-client.ts` on the client side.**
 
 ## GHL API Gotchas
 
-> Full schema reference: `/Users/isaiasrios/Downloads/GHL-API-Schemas.md`
-
-- **Version header required** on all requests: `Version: 2021-07-28` (legacy) or `2023-02-21` (current).
-- **customFields shape differs between read and write**:
-  - Write (create/update): `{ id, key, field_value }`
-  - Read (contacts): `{ id, value }`
-  - Read (opportunities): `{ id, fieldValue }`
-- **DATE custom fields use `fieldValueDate`** — an epoch in **milliseconds at UTC
-  midnight**, not `fieldValue`/`fieldValueString`/`value`. `resolveCustomFields()` in
-  `app/api/dashboard/route.ts` normalizes it to ISO so `customFieldsResolved` stays
-  string-valued. Bucket such dates with **UTC** getters: read in `America/Mexico_City`, a
-  close on the 1st at 00:00Z lands in the previous month.
-- **Tags on contacts**: sending `tags` in update/upsert **overwrites all existing tags**. Use `/contacts/:id/tags` (POST/DELETE) for incremental changes.
-- **Opportunity status** valid values: `open`, `won`, `lost`, `abandoned`, `all` (`all` is search-filter only).
-- **`lostReasonId`** is only relevant when status is `"lost"`.
-- **`/opportunities/search`** uses snake_case params (`location_id`, `pipeline_id`, etc.) — already handled by `useSnakeCaseLocationId` flag in `ghlFetch`.
-- **Conversation `type`** is numeric in some endpoints: `1=Phone`, `2=Email`, `3=FB Messenger`, `4=Review`, `5=Group SMS`.
-- **Required scopes**: `contacts.readonly/write`, `opportunities.readonly/write`, `conversations.readonly/write`.
+The REST API has enough sharp edges (customFields differing between read and write, DATE
+fields arriving as epoch-ms at UTC midnight, snake_case on `/opportunities/search`, tag
+writes overwriting the whole list) that they live in the **`ghl-api` skill**. Load it
+before touching `lib/ghl-client.ts`, `app/api/dashboard/route.ts`, `lib/ghl-fetchers.ts`,
+or any code that reads or writes GHL data.
 
 ## GHL MCP Server
 
@@ -553,23 +525,11 @@ An HTTP MCP server (`ghl-mcp`, configured in `.mcp.json`) connects directly to G
 
 - **Purpose**: lets Claude Code query/mutate live GHL data directly during development (inspecting real contacts, opportunities, pipelines, custom fields, conversations) without writing throwaway scripts. It is **not** part of the app's runtime data flow — the app always goes through `app/api/dashboard/route.ts` → `lib/ghl-client.ts`. Never wire MCP calls into application code.
 - **Use it to**: verify real data shapes, discover pipeline/custom-field IDs, confirm API behavior, and validate transforms against production data before coding them in `route.ts`.
-- **Tools** (prefixed `mcp__ghl-mcp__`), grouped:
-  - `contacts_*` — get-contact, get-contacts, create/update/upsert-contact, add-tags, remove-tags, get-all-tasks
-  - `opportunities_*` — get-opportunity, search-opportunity, get-pipelines, update-opportunity
-  - `conversations_*` — search-conversation, get-messages, send-a-new-message
-  - `locations_*` — get-location, get-custom-fields
-  - `calendars_*` — get-calendar-events, get-appointment-notes
-  - `payments_*` — list-transactions, get-order-by-id
-  - `blogs_*`, `emails_*`, `social-media-posting_*` — content/marketing operations
-- **Caution**: write tools (create/update/upsert/send/post) mutate live production data. Default to read-only tools; only use write tools when explicitly asked.
+- **Caution**: its tools are prefixed `mcp__ghl-mcp__`, and the write ones (create/update/upsert/send/post) mutate live production data. Default to read-only tools; only use write tools when explicitly asked.
 
 ### UI components
 
-- `components/ui/` — shadcn/ui components (generated, do not hand-edit)
-- `components/dashboard/` — domain components; each dashboard component receives already-filtered data as props
-- `components/dashboard/date-range-filter.tsx` is the only global filter UI; the `DateFilter` type lives in `lib/date-range.ts`
-- Charts use Recharts via the shadcn chart wrapper (`components/ui/chart.tsx`)
-- `components.json` controls shadcn/ui config (alias `@/components/ui`, Tailwind CSS v3)
+- `components/ui/` — shadcn/ui components (generated, **do not hand-edit**)
 - Shared chart chrome lives in `dashboard-ui.tsx`: `ChartCardHeader`, `ScopePill` (scope
   label + tooltip explaining a chart's rule), and `CardTone` (won/lost card tints — the
   light/dark pairs are tuned by eye, not numerically matched; don't "normalize" them)

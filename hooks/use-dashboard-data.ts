@@ -1,16 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import type {
-  Contact,
-  Opportunity,
-  Call,
-  Task,
-  Pipeline,
-  Pauta,
-  Appointment,
-  SyncWarning,
-} from "@/lib/types";
+import type { SyncWarning, DashboardPayload } from "@/lib/types";
 import { fetchStream } from "./fetch-stream";
 
 // Re-exported so components import it alongside the other dashboard types
@@ -49,29 +40,10 @@ const INITIAL_STEPS: StepMap = {
   tasks: { status: "pending" },
 };
 
-export interface DashboardData {
-  contacts: Contact[];
-  opportunities: Opportunity[];
-  calls: Call[];
-  tasks: Task[];
-  appointments: Appointment[];
-  pipelines: Pipeline[];
-  members: string[];
-  tags: string[];
-  campaigns: string[];
-  sources: string[];
-  pautas: Pauta[];
-  locationId: string;
-  locationName: string;
-  /** Datasets that came back incomplete or empty. Optional so a `data` frame
-   *  from an older deploy (a tab left open through a release) still parses. */
-  warnings?: SyncWarning[];
-  meta: {
-    totalContacts: number;
-    totalOpportunities: number;
-    fetchedAt: string;
-  };
-}
+// El shape lo define lib/types.ts, donde también lo leen lib/sync.ts (que lo
+// produce) y lib/sync-store.ts (que lo gzipea a Postgres). El alias se queda para
+// que los componentes sigan importando `DashboardData` de este hook.
+export type DashboardData = DashboardPayload;
 
 export function useDashboardData(params?: {
   startDate?: string;
@@ -94,7 +66,7 @@ export function useDashboardData(params?: {
   const startDate = params?.startDate;
   const endDate = params?.endDate;
 
-  const load = useCallback(async (sd?: string, ed?: string) => {
+  const load = useCallback(async (sd?: string, ed?: string, fresh?: boolean) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -102,6 +74,8 @@ export function useDashboardData(params?: {
     const searchParams = new URLSearchParams();
     if (sd) searchParams.set("startDate", sd);
     if (ed) searchParams.set("endDate", ed);
+    // `fresh=1` le dice a la ruta que ignore el caché de Postgres y vaya a GHL.
+    if (fresh) searchParams.set("fresh", "1");
     const qs = searchParams.toString();
     const url = `/api/dashboard${qs ? `?${qs}` : ""}`;
 
@@ -168,9 +142,27 @@ export function useDashboardData(params?: {
   // used to render as a frozen screen with no explanation.
   const stalled = isLoading && elapsedMs > 0 && Date.now() - lastStepAtRef.current > 15_000;
 
-  const refresh = useCallback(() => {
-    load(startDate, endDate);
-  }, [load, startDate, endDate]);
+  // ¿Esta carga es un sync en vivo contra GHL, o el caché sirviendo una fila de
+  // Postgres? Decide cuál de las dos caras pinta la pantalla de carga: el detalle
+  // por dataset solo tiene sentido en la primera.
+  //
+  // La señal es la llegada de un frame `step`, y SOLO esa. `progress` y
+  // `locationName` no sirven: `load()` fija el primero en el cliente antes de que
+  // la red conteste, y el segundo sobrevive de la carga anterior — los dos
+  // estarían "encendidos" en ambos caminos. Los `step` solo salen del servidor,
+  // y el camino caliente no emite ninguno: manda un único frame `data`.
+  const liveSync = Object.values(steps).some((s) => s.status !== "pending");
+
+  // Por defecto va en fresco: el botón "Actualizar" existe precisamente para
+  // saltarse el caché. Un refresco que devolviera lo mismo que ya está en
+  // pantalla se sentiría roto. El montaje inicial (el useEffect de arriba) NO
+  // pasa por aquí, así que sí lee el caché — que es el punto de todo esto.
+  const refresh = useCallback(
+    (opts?: { fresh?: boolean }) => {
+      load(startDate, endDate, opts?.fresh ?? true);
+    },
+    [load, startDate, endDate],
+  );
 
   return {
     data,
@@ -181,6 +173,7 @@ export function useDashboardData(params?: {
     steps,
     elapsedMs,
     stalled,
+    liveSync,
     refresh,
   };
 }

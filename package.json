@@ -20,11 +20,14 @@
     "verify:filters": "tsx scripts/verify-panel-filters.ts",
     "verify:task-backlog": "tsx scripts/verify-task-backlog.ts",
     "verify:stale-matrix": "tsx scripts/verify-stale-matrix.ts",
+    "verify:sync-store": "tsx --env-file-if-exists=.env.local scripts/verify-sync-store.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env.local scripts/db-migrate.ts",
     "add-client": "tsx scripts/add-client.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",
     "@hookform/resolvers": "^3.9.1",
+    "@neondatabase/serverless": "^1.1.0",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",
     "@radix-ui/react-aspect-ratio": "1.1.1",

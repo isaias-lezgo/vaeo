@@ -229,3 +229,39 @@ export interface SyncWarning {
   /** Total the API reported, when it reported one. */
   expected?: number
 }
+
+/**
+ * Everything one full sync produces: exactly the body of the `data` frame, minus
+ * its `type`. Declared here — not in the route and not in the hook — because
+ * three places now consume it (lib/sync.ts returns it, lib/sync-store.ts gzips
+ * it into Postgres, the browser renders it) and three copies would drift.
+ *
+ * `warnings` is part of the payload, not a property of the live stream: a warm
+ * load served from cache must still raise the amber banner for a dataset that
+ * came back incomplete during the sync that filled it.
+ */
+export interface DashboardPayload {
+  contacts: Contact[]
+  opportunities: Opportunity[]
+  calls: Call[]
+  tasks: Task[]
+  appointments: Appointment[]
+  pipelines: Pipeline[]
+  members: string[]
+  tags: string[]
+  campaigns: string[]
+  sources: string[]
+  pautas: Pauta[]
+  locationId: string
+  locationName: string
+  /** Datasets that came back incomplete or empty. Optional so a `data` frame
+   *  from an older deploy (a tab left open through a release) still parses. */
+  warnings?: SyncWarning[]
+  meta: {
+    totalContacts: number
+    totalOpportunities: number
+    /** When the data was pulled from GHL — the clock behind "Actualizado hace X"
+     *  and the value stored in `project_sync.synced_at`. */
+    fetchedAt: string
+  }
+}

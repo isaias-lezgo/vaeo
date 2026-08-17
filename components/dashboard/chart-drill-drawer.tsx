@@ -18,7 +18,8 @@ import { buildDrillExport } from "@/lib/drill-export"
 import { triggerDownload } from "@/lib/download"
 import { cn } from "@/lib/utils"
 import { MISSING_TEXT } from "./dashboard-ui"
-import { DollarSign, User, Tag, ChevronRight, TrendingUp, Phone, Mail, Download } from "lucide-react"
+import { PANEL_TIME_ZONE } from "@/lib/task-backlog"
+import { DollarSign, User, Tag, ChevronRight, TrendingUp, Phone, Mail, Download, ListChecks } from "lucide-react"
 
 const STAGE_CLASSES: Record<string, string> = {
   "Primera Cita":            "bg-blue-100 text-blue-700",
@@ -58,6 +59,13 @@ export interface DrillState {
    * contact-less pautas, which is the unique-leads behaviour instead.
    */
   pautaItems?: { pauta: Pauta; contact?: Contact }[]
+  /**
+   * One entry per TASK. Used where the chart counts tasks rather than the
+   * contacts behind them — deduping to `contactItems` is wrong there, because a
+   * task can carry no `contactId` at all (GHL allows it) and would vanish from
+   * a drill whose count said it was there.
+   */
+  taskItems?: Task[]
 }
 
 export const DRILL_CLOSED: DrillState = { open: false, title: "", opportunities: [] }
@@ -95,13 +103,17 @@ export function ChartDrillDrawer({
   const showMembers = (drill.members?.length ?? 0) > 0
   const showContacts = !showMembers && (drill.contactItems?.length ?? 0) > 0
   const showPautas = !showMembers && !showContacts && (drill.pautaItems?.length ?? 0) > 0
+  const showTasks =
+    !showMembers && !showContacts && !showPautas && (drill.taskItems?.length ?? 0) > 0
   const count = showMembers
     ? (drill.members?.length ?? 0)
     : showContacts
       ? (drill.contactItems?.length ?? 0)
       : showPautas
         ? (drill.pautaItems?.length ?? 0)
-        : drill.opportunities.length
+        : showTasks
+          ? (drill.taskItems?.length ?? 0)
+          : drill.opportunities.length
 
   const handleExport = () => {
     const result = buildDrillExport(drill, contacts)
@@ -164,6 +176,12 @@ export function ChartDrillDrawer({
                 items={drill.pautaItems!}
                 allOpportunities={allOpportunities}
                 onSelectOpp={(id) => { setSelectedOppId(id); setSelectedContactId(null); setDetailOpen(true) }}
+                onSelectContact={(id) => { setSelectedContactId(id); setSelectedOppId(null); setDetailOpen(true) }}
+              />
+            ) : showTasks ? (
+              <TaskList
+                items={drill.taskItems!}
+                contacts={contacts}
                 onSelectContact={(id) => { setSelectedContactId(id); setSelectedOppId(null); setDetailOpen(true) }}
               />
             ) : count === 0 ? (
@@ -350,6 +368,137 @@ function ContactList({
               )}
             </div>
           </motion.button>
+        )
+      })}
+    </>
+  )
+}
+
+/**
+ * Lista de TAREAS. A diferencia de ContactList, una fila no siempre lleva a
+ * ningún lado: GHL permite una tarea sin `contactId`, y esa fila se pinta como
+ * texto plano en vez de botón — un botón que no navega miente sobre lo que hay
+ * detrás. Ver `MISSING_TEXT` para la regla del rojizo en los huecos de captura.
+ */
+function TaskList({
+  items,
+  contacts,
+  onSelectContact,
+}: {
+  items: Task[]
+  contacts: Contact[]
+  onSelectContact: (id: string) => void
+}) {
+  const fmtDue = (iso?: string) => {
+    if (!iso) return null
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return null
+    return d.toLocaleDateString("es-MX", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      timeZone: PANEL_TIME_ZONE,
+    })
+  }
+
+  return (
+    <>
+      {items.map((t, i) => {
+        const contact = t.contactId ? contacts.find((c) => c.id === t.contactId) : undefined
+        const name = contact?.name ?? t.contactName
+        const due = fmtDue(t.dueDate)
+        const overdue = t.dueDate ? new Date(t.dueDate).getTime() < Date.now() : false
+
+        const body = (
+          <>
+            {/* Top row: el título de la tarea es el dato principal aquí */}
+            <div className="flex items-start justify-between gap-2 mb-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <ListChecks className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span
+                  className={cn(
+                    "text-sm font-semibold truncate",
+                    name && "group-hover:text-primary transition-colors",
+                    t.title ? "text-foreground" : MISSING_TEXT
+                  )}
+                >
+                  {t.title || "Sin título"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px]",
+                    overdue
+                      ? "bg-red-50 text-red-700 border-red-200"
+                      : "bg-blue-50 text-blue-700 border-blue-200"
+                  )}
+                >
+                  {overdue ? "Vencida" : "Pendiente"}
+                </Badge>
+                {name && (
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                )}
+              </div>
+            </div>
+
+            {/* Contacto — la cubeta centinela cuando la tarea no trae ninguno */}
+            <p className={cn("text-xs mb-2.5 truncate pl-5", name ? "text-muted-foreground" : MISSING_TEXT)}>
+              {name ?? "Sin contacto"}
+            </p>
+
+            <div className="flex items-center justify-between gap-2">
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                  due ? "bg-muted text-muted-foreground" : cn("bg-muted", MISSING_TEXT)
+                )}
+              >
+                {due ?? "Sin fecha"}
+              </span>
+              <span
+                className={cn(
+                  "truncate text-[11px]",
+                  t.assignedToName ? "text-muted-foreground" : MISSING_TEXT
+                )}
+              >
+                {t.assignedToName ?? "Sin asesor"}
+              </span>
+            </div>
+          </>
+        )
+
+        const className =
+          "group w-full text-left rounded-xl border border-border bg-card p-4 transition-all"
+
+        // Sin contacto no hay detalle que abrir: fila estática, no botón.
+        return name ? (
+          <motion.button
+            key={t.id}
+            type="button"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: Math.min(i * 0.025, 0.4), duration: 0.18 }}
+            onClick={() => contact && onSelectContact(contact.id)}
+            disabled={!contact}
+            className={cn(
+              className,
+              contact && "cursor-pointer hover:border-primary/40 hover:bg-accent/30"
+            )}
+          >
+            {body}
+          </motion.button>
+        ) : (
+          <motion.div
+            key={t.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: Math.min(i * 0.025, 0.4), duration: 0.18 }}
+            className={className}
+          >
+            {body}
+          </motion.div>
         )
       })}
     </>
