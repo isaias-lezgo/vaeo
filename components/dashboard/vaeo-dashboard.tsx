@@ -22,6 +22,7 @@ import { AdvisorStageTable } from "./advisor-stage-table"
 import { StaleOpportunityMatrix } from "./stale-opportunity-matrix"
 import { TaskBacklogChart } from "./task-backlog-chart"
 import { LostReasonMatrix } from "./lost-reason-matrix"
+import { LostCrossMatrix } from "./lost-cross-matrix"
 
 /**
  * VAEO — one of the two business lines (oficinas virtuales / oficinas equipadas
@@ -160,6 +161,9 @@ export function VaeoDashboard({
         <CanalDeContactoChart {...shared} />
       </div>
       <LostReasonMatrix {...shared} />
+      {/* Las mismas perdidas, la otra pregunta: no por qué se cayeron sino qué
+          se les estaba vendiendo y por dónde habían llegado. */}
+      <LostCrossMatrix {...shared} />
     </DashboardShell>
   )
 }

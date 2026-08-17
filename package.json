@@ -16,6 +16,7 @@
     "verify:breakdown": "tsx scripts/verify-breakdown.ts",
     "verify:category-filter": "tsx scripts/verify-category-filter.ts",
     "verify:lost-matrix": "tsx scripts/verify-lost-matrix.ts",
+    "verify:lost-cross": "tsx scripts/verify-lost-cross.ts",
     "verify:advisors": "tsx scripts/verify-advisors.ts",
     "verify:filters": "tsx scripts/verify-panel-filters.ts",
     "verify:task-backlog": "tsx scripts/verify-task-backlog.ts",

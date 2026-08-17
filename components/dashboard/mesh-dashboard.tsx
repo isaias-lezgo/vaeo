@@ -22,6 +22,7 @@ import { AdvisorStageTable } from "./advisor-stage-table"
 import { StaleOpportunityMatrix } from "./stale-opportunity-matrix"
 import { TaskBacklogChart } from "./task-backlog-chart"
 import { LostReasonMatrix } from "./lost-reason-matrix"
+import { LostCrossMatrix } from "./lost-cross-matrix"
 
 /**
  * MESH — the second business line: the coworking brand under Grupo VAEO
@@ -159,6 +160,7 @@ export function MeshDashboard({
         <CanalDeContactoChart {...shared} />
       </div>
       <LostReasonMatrix {...shared} />
+      <LostCrossMatrix {...shared} />
     </DashboardShell>
   )
 }
