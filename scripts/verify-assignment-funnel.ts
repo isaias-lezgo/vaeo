@@ -1,21 +1,20 @@
-// Verificación de lib/assignment-funnel.ts — el apilado de "Leads sin asesor por
-// mes". Correr: pnpm verify:assignment
+// Verificación de lib/assignment-funnel.ts — "Leads sin asesor por mes".
+// Correr: pnpm verify:assignment
 //
-// Justifica el script la regla de precedencia: una oportunidad SIN asesor que ya
-// se cerró como perdida es las dos cosas a la vez, y de qué lado cae decide el
-// gráfico entero. Si un día alguien "arregla" eso repartiéndola, las alturas
-// dejan de sumar el total del mes y nada en la UI se ve roto — las barras
-// simplemente encogen.
+// Lo que justifica el script es que esta tarjeta tiene DOS poblaciones en juego:
+// el apilado cuenta solo las oportunidades sin asesor, pero el porcentaje se
+// calcula contra TODOS los leads del mes. Confundirlas no truena nada — solo
+// hace que la tarjeta afirme un porcentaje equivocado con toda seguridad.
 //
 // Envuelto en main() en vez de top-level await: este paquete es CJS.
 import assert from "node:assert/strict";
 import type { Opportunity } from "../lib/types";
-import { NO_DATE_KEY, NO_DATE_LABEL } from "../lib/opportunity-breakdown";
+import { NO_DATE_KEY, NO_DATE_LABEL, STATUS_BUCKETS } from "../lib/opportunity-breakdown";
 import {
-  ASSIGNMENT_BUCKETS,
-  assignmentBucket,
-  buildAssignmentByMonth,
-  summarizeAssignment,
+  activeBuckets,
+  buildUnassignedByMonth,
+  isUnassigned,
+  summarizeUnassigned,
 } from "../lib/assignment-funnel";
 
 let seq = 0;
@@ -41,152 +40,156 @@ function opp(o: {
   };
 }
 
-const rowFor = (rows: ReturnType<typeof buildAssignmentByMonth>, key: string) => {
+const rowFor = (rows: ReturnType<typeof buildUnassignedByMonth>, key: string) => {
   const r = rows.find((x) => x.key === key);
   assert.ok(r, `existe la fila "${key}" (hay: ${rows.map((x) => x.key).join(", ")})`);
   return r!;
 };
 
 function main() {
-  // 1. La precedencia: sin asesor gana sobre CUALQUIER estatus o etapa.
+  // 1. Qué cuenta como sin asesor.
   {
-    assert.equal(assignmentBucket(opp({ advisor: "Zulema" })), "abierta");
-    assert.equal(assignmentBucket(opp({ advisor: "Zulema", status: "lost" })), "perdida");
-    assert.equal(assignmentBucket(opp({ advisor: "Zulema", status: "won" })), "ganada");
-    assert.equal(assignmentBucket(opp({ advisor: "Zulema", stage: "Ganado" })), "ganada");
-
-    // Las mismas cuatro, pero sin asesor: todas caen en la misma cubeta.
-    assert.equal(assignmentBucket(opp({})), "sinAsesor");
-    assert.equal(assignmentBucket(opp({ status: "lost" })), "sinAsesor");
-    assert.equal(assignmentBucket(opp({ status: "won" })), "sinAsesor");
-    assert.equal(assignmentBucket(opp({ stage: "Ganado" })), "sinAsesor");
-    assert.equal(assignmentBucket(opp({ status: "abandoned" })), "sinAsesor");
-
-    // Un asesor que es puro espacio en blanco no cuenta como asignado.
-    assert.equal(assignmentBucket(opp({ advisor: "   " })), "sinAsesor");
-    assert.equal(assignmentBucket(opp({ advisor: "" })), "sinAsesor");
+    assert.equal(isUnassigned(opp({})), true);
+    assert.equal(isUnassigned(opp({ advisor: "" })), true);
+    assert.equal(isUnassigned(opp({ advisor: "   " })), true, "espacios no son un asesor");
+    assert.equal(isUnassigned(opp({ advisor: "Zulema" })), false);
   }
 
-  // 2. Los cuatro segmentos son excluyentes y suman el total del mes. Esta es la
-  //    invariante que sostiene el apilado.
+  // 2. Las asignadas NO entran al apilado, pero SÍ al denominador. Esta es la
+  //    invariante que sostiene el porcentaje de la tarjeta.
   {
-    const rows = buildAssignmentByMonth([
+    const rows = buildUnassignedByMonth([
       opp({ createdAt: "2026-07-02T10:00:00.000Z" }),
-      opp({ createdAt: "2026-07-05T10:00:00.000Z", status: "lost" }),
-      opp({ createdAt: "2026-07-09T10:00:00.000Z", advisor: "Zulema", status: "lost" }),
-      opp({ createdAt: "2026-07-11T10:00:00.000Z", advisor: "Diana", stage: "Ganado" }),
-      opp({ createdAt: "2026-07-20T10:00:00.000Z", advisor: "Dariana" }),
+      opp({ createdAt: "2026-07-03T10:00:00.000Z", status: "lost" }),
+      opp({ createdAt: "2026-07-04T10:00:00.000Z", advisor: "Zulema", status: "lost" }),
+      opp({ createdAt: "2026-07-05T10:00:00.000Z", advisor: "Diana", stage: "Ganado" }),
     ]);
     const jul = rowFor(rows, "2026-07");
-    assert.equal(jul.sinAsesor, 2, "las dos sin asesor, perdida incluida");
-    assert.equal(jul.perdida, 1, "solo la perdida QUE SÍ tenía asesor");
-    assert.equal(jul.ganada, 1);
+    assert.equal(jul.total, 2, "solo las huérfanas llegan a la barra");
+    assert.equal(jul.monthTotal, 4, "pero el denominador cuenta a todas");
+    assert.equal(Math.round(jul.pctSinAsesor), 50);
     assert.equal(jul.abierta, 1);
-    assert.equal(jul.total, 5);
+    assert.equal(jul.perdida, 1);
+    assert.equal(jul.ganada, 0, "la ganada era de Diana, no huérfana");
 
-    const suma = ASSIGNMENT_BUCKETS.reduce((n, b) => n + jul[b], 0);
-    assert.equal(suma, jul.total, "los cuatro segmentos suman el total");
-    assert.equal(Math.round(jul.pctSinAsesor), 40);
+    const suma = STATUS_BUCKETS.reduce((n, b) => n + jul[b], 0);
+    assert.equal(suma, jul.total, "las cubetas suman la altura de la barra");
   }
 
-  // 3. Los ids del drill-down: cada oportunidad aparece en EXACTAMENTE una
-  //    cubeta. Un id duplicado inflaría el drawer sin mover el conteo.
+  // 3. Un mes con leads pero sin ningún huérfano se dibuja en cero, no se omite:
+  //    esa barra vacía es la buena noticia que la tarjeta quiere poder mostrar.
   {
-    const opps = [
+    const rows = buildUnassignedByMonth([
+      opp({ createdAt: "2026-05-10T10:00:00.000Z" }),
+      opp({ createdAt: "2026-06-10T10:00:00.000Z", advisor: "Zulema" }),
+      opp({ createdAt: "2026-07-10T10:00:00.000Z" }),
+    ]);
+    const jun = rowFor(rows, "2026-06");
+    assert.equal(jun.total, 0);
+    assert.equal(jun.monthTotal, 1);
+    assert.equal(jun.pctSinAsesor, 0);
+  }
+
+  // 4. Los ids del drill-down: cada huérfana en EXACTAMENTE una cubeta, y ninguna
+  //    asignada colándose.
+  {
+    const huerfanas = [
       opp({ createdAt: "2026-07-02T10:00:00.000Z" }),
-      opp({ createdAt: "2026-07-05T10:00:00.000Z", status: "lost" }),
-      opp({ createdAt: "2026-07-09T10:00:00.000Z", advisor: "Zulema", status: "won" }),
+      opp({ createdAt: "2026-07-03T10:00:00.000Z", status: "lost" }),
+      opp({ createdAt: "2026-07-04T10:00:00.000Z", stage: "Ganado" }),
     ];
-    const rows = buildAssignmentByMonth(opps);
+    const asignada = opp({ createdAt: "2026-07-05T10:00:00.000Z", advisor: "Zulema" });
+    const rows = buildUnassignedByMonth([...huerfanas, asignada]);
     const jul = rowFor(rows, "2026-07");
-    const todos = ASSIGNMENT_BUCKETS.flatMap((b) => jul.ids[b]);
-    assert.equal(todos.length, opps.length);
-    assert.equal(new Set(todos).size, opps.length, "ningún id repetido entre cubetas");
-    for (const b of ASSIGNMENT_BUCKETS) {
+    const ids = STATUS_BUCKETS.flatMap((b) => jul.ids[b]);
+    assert.equal(ids.length, huerfanas.length);
+    assert.equal(new Set(ids).size, huerfanas.length, "ningún id repetido");
+    assert.ok(!ids.includes(asignada.id), "una asignada NUNCA aparece en un drill-down");
+    for (const b of STATUS_BUCKETS) {
       assert.equal(jul.ids[b].length, jul[b], `ids["${b}"] cuadra con su conteo`);
     }
   }
 
-  // 4. Los meses intermedios vacíos se rellenan en cero, para que el eje no
-  //    dibuje un hueco de tres meses como si fueran dos barras consecutivas.
+  // 5. Una huérfana ganada por etapa (sin status "won") cuenta como ganada — la
+  //    misma regla que isWonOpp() aplica en todo el panel.
   {
-    const rows = buildAssignmentByMonth([
-      opp({ createdAt: "2026-03-10T10:00:00.000Z" }),
-      opp({ createdAt: "2026-06-10T10:00:00.000Z" }),
-    ]);
-    assert.deepEqual(
-      rows.map((r) => r.key),
-      ["2026-03", "2026-04", "2026-05", "2026-06"]
-    );
-    const abr = rowFor(rows, "2026-04");
-    assert.equal(abr.total, 0);
-    assert.equal(abr.pctSinAsesor, 0, "un mes vacío no es 'el 100% sin asesor'");
+    const rows = buildUnassignedByMonth([opp({ createdAt: "2026-07-02T10:00:00.000Z", stage: "Ganado" })]);
+    assert.equal(rowFor(rows, "2026-07").ganada, 1);
   }
 
-  // 5. Sin fecha legible: una fila propia al final, nunca un registro perdido.
+  // 6. Meses intermedios rellenos, y sin fecha al final.
   {
-    const rows = buildAssignmentByMonth([
-      opp({ createdAt: "2026-07-02T10:00:00.000Z" }),
+    const rows = buildUnassignedByMonth([
+      opp({ createdAt: "2026-03-10T10:00:00.000Z" }),
+      opp({ createdAt: "2026-06-10T10:00:00.000Z" }),
       opp({ createdAt: undefined }),
       opp({ createdAt: "no-es-una-fecha" }),
     ]);
-    const last = rows[rows.length - 1];
-    assert.equal(last.key, NO_DATE_KEY);
-    assert.equal(last.label, NO_DATE_LABEL);
-    assert.equal(last.total, 2);
-    assert.equal(
-      rows.reduce((n, r) => n + r.total, 0),
-      3,
-      "no se pierde ningún registro"
+    assert.deepEqual(
+      rows.map((r) => r.key),
+      ["2026-03", "2026-04", "2026-05", "2026-06", NO_DATE_KEY]
     );
+    const last = rows[rows.length - 1];
+    assert.equal(last.label, NO_DATE_LABEL);
+    assert.equal(last.total, 2, "no se pierde ningún registro sin fecha");
   }
 
-  // 6. Sin datos: arreglo vacío, no una fila fantasma.
+  // 7. activeBuckets: la leyenda no lista una serie que no se dibuja. Es lo que
+  //    evita un renglón "Ganadas" permanente que nunca corresponde a nada.
   {
-    assert.deepEqual(buildAssignmentByMonth([]), []);
-    const s = summarizeAssignment([]);
-    assert.equal(s.total, 0);
-    assert.equal(s.pctSinAsesor, 0);
-    assert.equal(s.cierreConAsesor, 0, "sin denominador, cero — no NaN");
-    assert.ok(!Number.isNaN(s.cierreConAsesor));
+    const soloPerdidas = buildUnassignedByMonth([
+      opp({ createdAt: "2026-07-02T10:00:00.000Z", status: "lost" }),
+    ]);
+    assert.deepEqual(activeBuckets(soloPerdidas), ["perdida"]);
+
+    const conAbiertas = buildUnassignedByMonth([
+      opp({ createdAt: "2026-07-02T10:00:00.000Z", status: "lost" }),
+      opp({ createdAt: "2026-07-03T10:00:00.000Z" }),
+    ]);
+    assert.deepEqual(activeBuckets(conAbiertas), ["abierta", "perdida"]);
+
+    // Y en cuanto aparece una ganada huérfana, la serie entra sola.
+    const conGanada = buildUnassignedByMonth([
+      opp({ createdAt: "2026-07-02T10:00:00.000Z", status: "lost" }),
+      opp({ createdAt: "2026-07-03T10:00:00.000Z", stage: "Ganado" }),
+    ]);
+    assert.deepEqual(activeBuckets(conGanada), ["ganada", "perdida"]);
+
+    assert.deepEqual(activeBuckets([]), [], "sin filas no hay series");
   }
 
-  // 7. El resumen de la nota al pie.
+  // 8. El resumen de la nota al pie.
   {
-    const rows = buildAssignmentByMonth([
-      opp({ createdAt: "2026-07-02T10:00:00.000Z" }),
+    const rows = buildUnassignedByMonth([
+      opp({ createdAt: "2026-07-02T10:00:00.000Z", status: "lost" }),
       opp({ createdAt: "2026-07-03T10:00:00.000Z", status: "lost" }),
-      opp({ createdAt: "2026-07-04T10:00:00.000Z", status: "lost" }),
-      opp({ createdAt: "2026-07-05T10:00:00.000Z", advisor: "Zulema", stage: "Ganado" }),
-      opp({ createdAt: "2026-07-06T10:00:00.000Z", advisor: "Diana", status: "lost" }),
+      opp({ createdAt: "2026-07-04T10:00:00.000Z" }),
+      opp({ createdAt: "2026-07-05T10:00:00.000Z", advisor: "Zulema" }),
+      opp({ createdAt: "2026-07-06T10:00:00.000Z", advisor: "Diana", stage: "Ganado" }),
     ]);
-    const s = summarizeAssignment(rows);
-    assert.equal(s.total, 5);
-    assert.equal(s.sinAsesor, 3);
+    const s = summarizeUnassigned(rows);
+    assert.equal(s.total, 3, "huérfanas");
+    assert.equal(s.grandTotal, 5, "todos los leads");
     assert.equal(Math.round(s.pctSinAsesor), 60);
-    assert.equal(s.ganadasConAsesor, 1);
-    assert.equal(s.ganadasSinAsesor, 0);
-    // 1 ganada de 2 que sí tuvieron asesor. El denominador NO es el total: decir
-    // "20% de cierre" mezclaría la fuga con el desempeño de quien sí trabajó.
-    assert.equal(s.cierreConAsesor, 50);
+    assert.deepEqual(s.byBucket, { ganada: 0, abierta: 1, perdida: 2 });
   }
 
-  // 8. `ganadasSinAsesor` se MIDE, no se asume. Es la afirmación fuerte de la
-  //    tarjeta ("de esos no se ha ganado ninguno"), así que tiene que ser capaz
-  //    de salir distinta de cero cuando los datos lo digan.
+  // 9. Sin datos: nada de NaN en los porcentajes.
   {
-    const rows = buildAssignmentByMonth([
-      opp({ createdAt: "2026-07-02T10:00:00.000Z", stage: "Ganado" }),
-      opp({ createdAt: "2026-07-03T10:00:00.000Z", status: "won" }),
-      opp({ createdAt: "2026-07-04T10:00:00.000Z", status: "lost" }),
-    ]);
-    const jul = rowFor(rows, "2026-07");
-    assert.equal(jul.sinAsesor, 3, "las tres siguen en la cubeta de la fuga");
-    assert.equal(jul.ganada, 0, "y ninguna se cuela al segmento de ganadas");
-    assert.equal(jul.sinAsesorGanadas, 2, "pero el subconteo sí las ve");
-    assert.equal(summarizeAssignment(rows).ganadasSinAsesor, 2);
-    // El subconteo NO entra en el total: no es un quinto segmento.
-    assert.equal(jul.total, 3);
+    assert.deepEqual(buildUnassignedByMonth([]), []);
+    const s = summarizeUnassigned([]);
+    assert.equal(s.total, 0);
+    assert.equal(s.grandTotal, 0);
+    assert.equal(s.pctSinAsesor, 0);
+    assert.ok(!Number.isNaN(s.pctSinAsesor));
+
+    // Un periodo con leads pero sin huérfanos: 0%, no división por cero.
+    const sanos = summarizeUnassigned(
+      buildUnassignedByMonth([opp({ createdAt: "2026-07-02T10:00:00.000Z", advisor: "Zulema" })])
+    );
+    assert.equal(sanos.total, 0);
+    assert.equal(sanos.grandTotal, 1);
+    assert.equal(sanos.pctSinAsesor, 0);
   }
 
   console.log("verify-assignment-funnel: OK");

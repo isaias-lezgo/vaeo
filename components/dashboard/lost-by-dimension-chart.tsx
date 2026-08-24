@@ -45,6 +45,12 @@ import { ChartDrillDrawer, DRILL_CLOSED, type DrillState } from "./chart-drill-d
 
 const n = (v: number) => v.toLocaleString("es-MX")
 
+/** Misma lectura que hace buildSalesSeries del custom field de la dimensión. */
+function cfString(v: string | string[] | undefined): string {
+  const s = Array.isArray(v) ? v[0] : v
+  return (s ?? "").trim()
+}
+
 type Dimension = "sucursal" | "servicio"
 
 /**
@@ -151,6 +157,49 @@ function UniverseSwitch({
   )
 }
 
+/**
+ * Prende y apaga la cubeta sin dato capturado dentro del apilado. Va rotulada en
+ * el rojizo de MISSING_TEXT cuando está prendida, igual que la etiqueta de esa
+ * serie en la leyenda: no es una categoría del negocio, es un hueco en el CRM.
+ */
+function MissingToggle({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      aria-pressed={value}
+      title={
+        value
+          ? `Quitar "${label}" del apilado — se come la gráfica`
+          : `Incluir "${label}" en el apilado`
+      }
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-[11px] font-medium tracking-wide transition-colors",
+        value
+          ? "bg-card shadow-sm"
+          : "bg-muted/40 text-muted-foreground hover:text-foreground"
+      )}
+    >
+      <span
+        className={cn(
+          "h-2.5 w-2.5 shrink-0 rounded-sm border",
+          value ? "border-transparent bg-[#9ca3af]" : "border-border"
+        )}
+        aria-hidden
+      />
+      <span className={cn(value && MISSING_TEXT)}>{label}</span>
+    </button>
+  )
+}
+
 export function LostByDimensionChart({
   panel,
   dimension,
@@ -168,6 +217,8 @@ export function LostByDimensionChart({
 }: LostByDimensionChartProps) {
   const [drill, setDrill] = useState<DrillState>(DRILL_CLOSED)
   const [universe, setUniverse] = useState<Universe>("no-ganadas")
+  /** Apagado: la cubeta sin dato capturado vive en la nota, no en el apilado. */
+  const [showEmpty, setShowEmpty] = useState(false)
   /** Slot aislado por la leyenda; null = todas visibles. */
   const [isolated, setIsolated] = useState<string | null>(null)
 
@@ -186,6 +237,22 @@ export function LostByDimensionChart({
   // el lector LOCAL de opportunity-breakdown, el mismo que usa "Oportunidades
   // por estado", para que las dos gráficas pongan cada lead en el mismo mes.
   const monthOf = useMemo(() => (o: Opportunity) => createdMonthKeyOf(o.createdAt), [])
+
+  // La cubeta "Sin servicio" entra al apilado solo si el usuario la pide, y
+  // arranca APAGADA. Con ~89% de los leads sin el campo capturado, ese segmento
+  // gris se come la gráfica entera y los productos reales quedan en franjas de
+  // un pixel: un apilado que solo se puede leer como "casi todo es gris" no
+  // informa de nada. Apagada, el dato no se esconde — cambia de lugar, a la nota
+  // al pie, que lo dice en números absolutos y es donde sí se lee.
+  //
+  // Consecuencia deliberada de apagarla: el total del encabezado y las etiquetas
+  // sobre cada barra cuentan SOLO los leads con la dimensión capturada, para que
+  // el número diga exactamente lo que está dibujado.
+  const hasDim = useMemo(
+    () => (o: Opportunity) =>
+      cfString(o.customFieldsResolved?.[dimOpts.dimensionField]) !== "",
+    [dimOpts.dimensionField]
+  )
 
   const scopedAll = useMemo(
     () => scopeOpportunities(allOpportunities, panel, pipelines),
@@ -222,12 +289,12 @@ export function LostByDimensionChart({
     () =>
       buildSalesSeries(scoped, {
         ...dimOpts,
-        include: UNIVERSES[universe].includes,
+        include: (o) => UNIVERSES[universe].includes(o) && (showEmpty || hasDim(o)),
         monthOf,
         measure: "count",
         namedKeys,
       }),
-    [scoped, dimOpts, universe, monthOf, namedKeys]
+    [scoped, dimOpts, universe, showEmpty, monthOf, namedKeys, hasDim]
   )
 
   const slots = useMemo(
@@ -308,8 +375,21 @@ export function LostByDimensionChart({
   // La cubeta va DENTRO del apilado y con su nota debajo — esconderla dejaría
   // una gráfica que parece decir algo del negocio cuando lo que dice es que el
   // dato no se está capturando.
-  const emptyTotal = data.series.find((s) => s.kind === "empty")?.total ?? 0
-  const emptyPct = data.grandTotal > 0 ? (emptyTotal / data.grandTotal) * 100 : 0
+  // Ojo: estas dos NO salen de `data`, que ya viene recortado por el toggle.
+  // Salen del universo completo, para que la nota diga lo mismo esté el toggle
+  // prendido o apagado — es el número que el cliente tiene que ir a arreglar en
+  // GHL, y no puede depender de cómo esté configurada la vista.
+  const { universeTotal, missingTotal } = useMemo(() => {
+    let universeTotal = 0
+    let missingTotal = 0
+    for (const o of scoped) {
+      if (!UNIVERSES[universe].includes(o)) continue
+      universeTotal += 1
+      if (!hasDim(o)) missingTotal += 1
+    }
+    return { universeTotal, missingTotal }
+  }, [scoped, universe, hasDim])
+  const missingPct = universeTotal > 0 ? (missingTotal / universeTotal) * 100 : 0
   const noDateTotal = data.buckets.find((b) => b.kind === "no-date")?.total ?? 0
 
   // ChartStyle emite `--color-<slot>` bajo [data-chart=chart-<id>], y la leyenda
@@ -326,6 +406,11 @@ export function LostByDimensionChart({
         actions={
           <>
             <UniverseSwitch value={universe} onChange={setUniverse} />
+            <MissingToggle
+              label={dimOpts.emptyLabel}
+              value={showEmpty}
+              onChange={setShowEmpty}
+            />
             <ScopePill
               label={`${universeCfg.label} · por mes de creación`}
               tooltip={
@@ -346,8 +431,11 @@ export function LostByDimensionChart({
                       cambia a <em>Perdidas</em> para ver solo desenlaces cerrados.
                     </>
                   )}{" "}
-                  Las que no tienen {dimLabel} capturado caen en el segmento gris, que hoy
-                  se lleva la mayoría — ver la nota bajo la gráfica.
+                  Las que no tienen {dimLabel} capturado —hoy la mayoría— quedan{" "}
+                  <strong>fuera</strong> del apilado y se reportan en la nota bajo la
+                  gráfica; el botón <em>{dimOpts.emptyLabel}</em> las trae de vuelta. Con
+                  el botón apagado, el total del encabezado y las etiquetas de cada barra
+                  cuentan solo las que sí lo traen, que es exactamente lo dibujado.
                 </>
               }
             />
@@ -356,7 +444,17 @@ export function LostByDimensionChart({
       />
       <ChartCardContent>
         {rows.length === 0 ? (
-          <ChartEmpty message="Sin leads no ganados en el periodo seleccionado" />
+          // Con el toggle apagado, "no hay barras" tiene DOS causas muy
+          // distintas: que no hubo leads, o que ninguno trae el campo. Decir
+          // "sin leads" en el segundo caso sería falso — y es el caso probable
+          // en un periodo corto, porque el campo casi no se captura.
+          <ChartEmpty
+            message={
+              missingTotal > 0
+                ? `Ninguno de los ${n(universeTotal)} ${universeCfg.noun} del periodo trae ${dimField} capturado`
+                : "Sin leads no ganados en el periodo seleccionado"
+            }
+          />
         ) : (
           <>
             <div
@@ -473,13 +571,26 @@ export function LostByDimensionChart({
               </BarChart>
             </ChartContainer>
 
-            {emptyTotal > 0 && (
+            {missingTotal > 0 && (
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                En <strong>{n(emptyTotal)}</strong> de {n(data.grandTotal)}{" "}
-                {universeCfg.noun} ({emptyPct.toFixed(1)}%) nadie capturó{" "}
-                <strong>{dimField}</strong> en el CRM. Ese campo se llena al{" "}
-                <strong>perfilar</strong> el lead, y estos se cayeron antes de llegar ahí:
-                el segmento gris no es un producto sin nombre, es el hueco de captura.
+                {showEmpty ? (
+                  <>
+                    El segmento gris son <strong>{n(missingTotal)}</strong> de{" "}
+                    {n(universeTotal)} {universeCfg.noun} ({missingPct.toFixed(1)}%) en los
+                    que nadie capturó <strong>{dimField}</strong> en el CRM.
+                  </>
+                ) : (
+                  <>
+                    La gráfica muestra los <strong>{n(data.grandTotal)}</strong>{" "}
+                    {universeCfg.noun} que sí traen <strong>{dimField}</strong> capturado.
+                    Los otros {n(missingTotal)} de {n(universeTotal)} (
+                    {missingPct.toFixed(1)}%) quedan fuera — préndelos con{" "}
+                    <em>{dimOpts.emptyLabel}</em> arriba si quieres verlos, aunque tapan
+                    todo lo demás.
+                  </>
+                )}{" "}
+                Ese campo se llena al <strong>perfilar</strong> el lead, y estos se cayeron
+                antes de llegar ahí: no es un producto sin nombre, es el hueco de captura.
               </p>
             )}
             {noDateTotal > 0 && (

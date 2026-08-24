@@ -14,12 +14,12 @@ import type {
   Task,
 } from "@/lib/types"
 import {
-  ASSIGNMENT_BUCKETS,
-  ASSIGNMENT_LABELS,
-  buildAssignmentByMonth,
-  summarizeAssignment,
-  type AssignmentBucket,
+  activeBuckets,
+  buildUnassignedByMonth,
+  summarizeUnassigned,
+  type UnassignedMonthRow,
 } from "@/lib/assignment-funnel"
+import { STATUS_LABELS, type StatusBucket } from "@/lib/opportunity-breakdown"
 import { PANEL_SCOPES, scopeOpportunities, type PanelId } from "@/lib/panel-scope"
 import { cn } from "@/lib/utils"
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart"
@@ -33,32 +33,31 @@ import {
   MISSING_TEXT,
   MissingAwareTick,
   NonZeroTooltipContent,
-  SERIES_NEUTRALS,
   STRUCTURAL_NAVY,
   ScopePill,
 } from "./dashboard-ui"
 import { ChartDrillDrawer, DRILL_CLOSED, type DrillState } from "./chart-drill-drawer"
 
 /**
- * Los tres desenlaces reusan EXACTAMENTE los colores de "Oportunidades por
- * estado": son la misma pregunta sobre los mismos registros, y dos verdes
- * distintos para "ganada" harían leer los dos charts como sistemas separados.
+ * Los mismos colores EXACTOS de "Oportunidades por estado": es la misma pregunta
+ * sobre los mismos registros, solo que recortada a los leads que nadie tomó, y
+ * dos verdes distintos para "ganada" harían leer los dos charts como sistemas
+ * separados.
  *
- * "Sin asesor" es una cubeta centinela, así que va en el gris de SERIES_NEUTRALS
- * y NO en un cuarto color semántico. El rojizo de MISSING_TEXT se queda en la
- * etiqueta de la leyenda; teñir el segmento rompería la validación de la paleta
- * y, peor, competiría con el rojo que ya significa "perdida" a su lado.
+ * Ya no hay un cuarto tono para "sin asesor": el universo entero de esta tarjeta
+ * son las sin asesor, así que un segmento con ese nombre sería la barra completa.
  */
 const config: ChartConfig = {
-  sinAsesor: { label: ASSIGNMENT_LABELS.sinAsesor, theme: SERIES_NEUTRALS.empty },
-  perdida: { label: ASSIGNMENT_LABELS.perdida, color: "#ef4444" },
-  abierta: { label: ASSIGNMENT_LABELS.abierta, color: STRUCTURAL_NAVY },
-  ganada: { label: ASSIGNMENT_LABELS.ganada, color: "#10b981" },
+  perdida: { label: STATUS_LABELS.perdida, color: "#ef4444" },
+  abierta: { label: STATUS_LABELS.abierta, color: STRUCTURAL_NAVY },
+  ganada: { label: STATUS_LABELS.ganada, color: "#10b981" },
 }
+
+/** Orden del apilado, de abajo hacia arriba. */
+const STACK_ORDER: StatusBucket[] = ["perdida", "abierta", "ganada"]
 
 const n = (v: number) => v.toLocaleString("es-MX")
 const pctFmt = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 })
-const pct1 = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 })
 
 export interface AssignmentFunnelChartProps {
   panel: PanelId
@@ -95,18 +94,24 @@ export function AssignmentFunnelChart({
   const scope = PANEL_SCOPES[panel]
 
   const rows = useMemo(
-    () => buildAssignmentByMonth(scopeOpportunities(opportunities, panel, pipelines)),
+    () => buildUnassignedByMonth(scopeOpportunities(opportunities, panel, pipelines)),
     [opportunities, panel, pipelines]
   )
 
-  const summary = useMemo(() => summarizeAssignment(rows), [rows])
+  const summary = useMemo(() => summarizeUnassigned(rows), [rows])
+
+  // Solo las cubetas con registros llegan al apilado y a la leyenda.
+  const buckets = useMemo(
+    () => STACK_ORDER.filter((b) => activeBuckets(rows).includes(b)),
+    [rows]
+  )
 
   const oppById = useMemo(
     () => new Map(allOpportunities.map((o) => [o.id, o])),
     [allOpportunities]
   )
 
-  const openDrill = (monthKey: string, bucket: AssignmentBucket) => {
+  const openDrill = (monthKey: string, bucket: StatusBucket) => {
     const row = rows.find((r) => r.key === monthKey)
     if (!row) return
     const items = row.ids[bucket]
@@ -115,8 +120,8 @@ export function AssignmentFunnelChart({
     if (items.length === 0) return
     setDrill({
       open: true,
-      title: `${row.label} — ${ASSIGNMENT_LABELS[bucket]}`,
-      subtitle: `Embudo ${scope.label}`,
+      title: `${row.label} — ${STATUS_LABELS[bucket]}`,
+      subtitle: `Embudo ${scope.label} · sin asesor asignado`,
       opportunities: items,
     })
   }
@@ -137,12 +142,14 @@ export function AssignmentFunnelChart({
             label="Por mes de creación"
             tooltip={
               <>
-                Oportunidades del embudo <strong>{scope.label}</strong> agrupadas por el mes
-                en que se crearon. El primer corte es si alguien las tomó: una oportunidad{" "}
-                <strong>sin asesor asignado</strong> cuenta en el segmento gris{" "}
-                <em>aunque ya esté cerrada como perdida</em>, porque nunca se trabajó. Los
-                tres segmentos de arriba son el desenlace de las que sí tuvieron asesor.
-                Los meses sin movimiento se dibujan en cero para no comprimir el eje.
+                Cuenta <strong>solo</strong> las oportunidades del embudo{" "}
+                <strong>{scope.label}</strong> que <strong>no tienen asesor asignado</strong>,
+                agrupadas por el mes en que se crearon y partidas por su estatus. Las que sí
+                tienen asesor no aparecen aquí: para eso están &ldquo;Oportunidades por
+                estado&rdquo; y la tabla por asesor. El porcentaje del tooltip es cuánto pesan
+                los huérfanos dentro de todos los leads de ese mes. Un mes que tuvo leads pero
+                ninguno huérfano se dibuja en cero, porque esa barra vacía es una buena
+                noticia.
               </>
             }
           />
@@ -150,7 +157,16 @@ export function AssignmentFunnelChart({
       />
       <ChartCardContent>
         {summary.total === 0 ? (
-          <ChartEmpty message="Sin oportunidades en el periodo seleccionado" />
+          // Dos vacíos distintos, y NINGUNO usa el rojizo de cubeta centinela:
+          // que no haya leads es un periodo vacío, y que no haya huérfanos es
+          // literalmente la meta de la tarjeta.
+          <ChartEmpty
+            message={
+              summary.grandTotal === 0
+                ? "Sin oportunidades en el periodo seleccionado"
+                : "Todos los leads del periodo tienen asesor asignado"
+            }
+          />
         ) : (
           <>
             <div
@@ -159,7 +175,7 @@ export function AssignmentFunnelChart({
             >
               {/* Al revés que el apilado: la leyenda se lee de arriba abajo, y
                   el stack se dibuja de abajo arriba. */}
-              {[...ASSIGNMENT_BUCKETS].reverse().map((bucket) => (
+              {[...buckets].reverse().map((bucket) => (
                 <span
                   key={bucket}
                   className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
@@ -169,9 +185,7 @@ export function AssignmentFunnelChart({
                     style={{ backgroundColor: `var(--color-${bucket})` }}
                     aria-hidden
                   />
-                  <span className={cn(bucket === "sinAsesor" && MISSING_TEXT)}>
-                    {ASSIGNMENT_LABELS[bucket]}
-                  </span>
+                  {STATUS_LABELS[bucket]}
                 </span>
               ))}
             </div>
@@ -195,8 +209,26 @@ export function AssignmentFunnelChart({
                   width={44}
                   allowDecimals={false}
                 />
-                <ChartTooltip content={<NonZeroTooltipContent />} />
-                {ASSIGNMENT_BUCKETS.map((bucket, i) => (
+                <ChartTooltip
+                  content={
+                    <NonZeroTooltipContent
+                      labelFormatter={(value, payload) => {
+                        const row = payload?.[0]?.payload as UnassignedMonthRow | undefined
+                        if (!row || row.monthTotal === 0) return value
+                        return (
+                          <>
+                            <div>{value}</div>
+                            <div className="font-normal text-muted-foreground">
+                              {pctFmt.format(row.pctSinAsesor)}% de los {n(row.monthTotal)} leads
+                              del mes
+                            </div>
+                          </>
+                        )
+                      }}
+                    />
+                  }
+                />
+                {buckets.map((bucket, i) => (
                   <Bar
                     key={bucket}
                     dataKey={bucket}
@@ -204,7 +236,7 @@ export function AssignmentFunnelChart({
                     fill={`var(--color-${bucket})`}
                     // Solo la serie de hasta arriba lleva esquinas redondeadas, o
                     // el apilado se ve partido en bloques sueltos.
-                    radius={i === ASSIGNMENT_BUCKETS.length - 1 ? [3, 3, 0, 0] : undefined}
+                    radius={i === buckets.length - 1 ? [3, 3, 0, 0] : undefined}
                     cursor="pointer"
                     onClick={(payload: { key?: string }) => {
                       if (payload?.key) openDrill(payload.key, bucket)
@@ -214,18 +246,21 @@ export function AssignmentFunnelChart({
               </BarChart>
             </ChartContainer>
 
-            {summary.sinAsesor > 0 && (
-              <p className="mt-3 border-t border-border pt-2 text-[11px] leading-relaxed text-muted-foreground">
-                <span className={cn("font-medium", MISSING_TEXT)}>{n(summary.sinAsesor)}</span>{" "}
-                de {n(summary.total)} leads ({pctFmt.format(summary.pctSinAsesor)}%) nunca se
-                asignaron a un asesor
-                {summary.ganadasSinAsesor === 0
-                  ? ", y de esos no se ha ganado ninguno"
-                  : `, y de esos se han ganado ${n(summary.ganadasSinAsesor)}`}
-                . Los que sí se trabajaron cierran al {pct1.format(summary.cierreConAsesor)}%.
-                Asignar el lead se corrige en GHL, no aquí.
-              </p>
-            )}
+            <p className="mt-3 border-t border-border pt-2 text-[11px] leading-relaxed text-muted-foreground">
+              <span className={cn("font-medium", MISSING_TEXT)}>{n(summary.total)}</span> de{" "}
+              {n(summary.grandTotal)} leads ({pctFmt.format(summary.pctSinAsesor)}%) nunca se
+              asignaron a un asesor. La gráfica muestra solo a esos:{" "}
+              {n(summary.byBucket.perdida)}{" "}
+              {summary.byBucket.perdida === 1 ? "ya se dio por perdido" : "ya se dieron por perdidos"} y{" "}
+              {n(summary.byBucket.abierta)}{" "}
+              {summary.byBucket.abierta === 1 ? "sigue abierto" : "siguen abiertos"}
+              {summary.byBucket.ganada === 0
+                ? ", y no se ha ganado ninguno"
+                : summary.byBucket.ganada === 1
+                  ? ", y 1 se ganó"
+                  : `, y ${n(summary.byBucket.ganada)} se ganaron`}
+              . Asignar el lead se corrige en GHL, no aquí.
+            </p>
           </>
         )}
       </ChartCardContent>
