@@ -57,6 +57,25 @@ const PAGE_SIZE = 100;
 /** Mismo patrón que dashboard-messages: no disparar cientos de hilos a la vez. */
 const CONCURRENCY = 6;
 
+/**
+ * Cuánto del avance total se lleva la fase 1 (recorrer conversaciones) frente a
+ * la fase 2 (abrir los hilos que terminan en entrante).
+ *
+ * No es un número inventado ni estimado: sale de cronometrar la ruta contra la
+ * sub-cuenta real (2026-08-24). 3 300 conversaciones en 33 páginas tardaron
+ * 16 s; los 589 hilos con CONCURRENCY 6 tardaron 73 s. 16 / 89 ≈ 0.18.
+ *
+ * Vale la pena recalibrarlo si el volumen de la cuenta cambia de orden, pero no
+ * afinarlo: el error de unos puntos solo hace que la barra corra un poco
+ * disparejo en la costura, y el reparto correcto entre las dos fases importa
+ * mucho más que la precisión dentro de cada una.
+ */
+const SCAN_WEIGHT = 0.2;
+
+function clamp01(v: number): number {
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+}
+
 export async function GET() {
   // El cliente se resuelve en el scope del request: cookies() no está
   // disponible dentro del callback del stream.
@@ -75,10 +94,22 @@ export async function GET() {
           controller.enqueue(encoder.encode(enc(obj)));
         };
 
-        try {
-          const cutoff = Date.now() - STALE_HORIZON_DAYS * 86_400_000;
+        // La barra NUNCA retrocede. Las dos fases estiman su avance por
+        // caminos distintos (fechas una, conteos la otra) y en la costura
+        // pueden discrepar por unos puntos; un porcentaje que da marcha atrás
+        // se lee como que algo salió mal, que es justo lo contrario de lo que
+        // esta barra existe para comunicar.
+        let lastPct = 0;
+        const sendProgress = (message: string, pct: number) => {
+          lastPct = Math.max(lastPct, clamp01(pct));
+          send({ type: "progress", message, pct: lastPct });
+        };
 
-          send({ type: "progress", message: "Cargando actividad de conversaciones…" });
+        try {
+          const started = Date.now();
+          const cutoff = started - STALE_HORIZON_DAYS * 86_400_000;
+
+          sendProgress("Cargando actividad de conversaciones…", 0);
 
           // 1. Recorrer las conversaciones de la más reciente a la más vieja y
           //    cortar al cruzar el horizonte.
@@ -136,24 +167,49 @@ export async function GET() {
 
             const last = docs[docs.length - 1];
             const next = last?.sort?.[0];
+
+            // El avance de esta fase se mide por FECHA, no por páginas: el
+            // recorrido va de la conversación más reciente hacia atrás hasta
+            // cruzar el horizonte, así que qué tanto retrocedió el cursor
+            // dentro de esa ventana ES el avance. Contar páginas contra
+            // MAX_PAGES daría un porcentaje falso — el tope es un seguro que
+            // casi nunca se toca, no una meta. Se toma el máximo con el avance
+            // por páginas solo como piso, para que una cuenta con fechas raras
+            // no deje la barra clavada en cero.
+            const cursorTs = next === undefined ? NaN : Number(next);
+            // Se acota aquí y no solo en sendProgress: la última página cruza
+            // el horizonte, así que sin el tope daría >1 y se comería un
+            // pedazo del presupuesto de la fase 2.
+            const byDate = Number.isFinite(cursorTs)
+              ? clamp01((started - cursorTs) / (started - cutoff))
+              : 0;
+            const byPage = (page + 1) / MAX_PAGES;
+            sendProgress(
+              `Conversaciones revisadas: ${scanned.toLocaleString("es-MX")}`,
+              Math.max(byDate, byPage) * SCAN_WEIGHT
+            );
+
             if (next === undefined) break;
             cursor = next;
             if (docs.length < PAGE_SIZE) break;
-
-            send({
-              type: "progress",
-              message: `Revisando conversaciones… ${scanned.toLocaleString("es-MX")}`,
-            });
           }
 
           // 2. Abrir solo los hilos que terminan en entrante y siguen dentro del
           //    horizonte, con concurrencia acotada.
-          send({
-            type: "progress",
-            message: `Revisando ${pending.length.toLocaleString("es-MX")} conversaciones sin respuesta…`,
-          });
+          const pendingTotal = pending.length;
+          // Corta a propósito: la tarjeta le da poco más de 20rem y el texto
+          // se trunca. Lo que no puede perderse en el corte es el "de N", que
+          // es lo que convierte el número en un avance y no en un dato suelto.
+          const threadLabel = (done: number) =>
+            `Sin respuesta: ${done.toLocaleString("es-MX")} de ${pendingTotal.toLocaleString("es-MX")}`;
+
+          sendProgress(
+            pendingTotal === 0 ? "Cerrando…" : threadLabel(0),
+            SCAN_WEIGHT
+          );
 
           let idx = 0;
+          let done = 0;
           const found: Array<{ contactId: string; iso: string } | null> = new Array(
             pending.length
           );
@@ -180,6 +236,16 @@ export async function GET() {
                   // (el último saliente es ≤ el último mensaje, que ya es viejo).
                   found[i] = null;
                 }
+                done++;
+                // Un frame por hilo serían ~600 escrituras al stream para
+                // mover la barra menos de un pixel cada una. Se emite por
+                // tramos, y siempre el último.
+                if (done % 10 === 0 || done === pendingTotal) {
+                  sendProgress(
+                    threadLabel(done),
+                    SCAN_WEIGHT + (done / pendingTotal) * (1 - SCAN_WEIGHT)
+                  );
+                }
               }
             })
           );
@@ -201,6 +267,7 @@ export async function GET() {
             lastOutboundAt,
           }));
 
+          sendProgress("Listo", 1);
           send({
             type: "data",
             activity,

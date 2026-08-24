@@ -14,10 +14,16 @@ export interface StreamStep {
  * Calls `onProgress` for progress frames, `onStep` for structured per-dataset
  * progress, and resolves with the payload of the single `data` frame (its `type`
  * field stripped).
+ *
+ * A progress frame MAY carry a `pct` (0–1) when the route can bound its own
+ * work; `onProgress` receives it as an optional second argument. It stays
+ * optional on purpose — the main sync has no honest denominator and reports
+ * with `step` frames instead, and a callback that ignores the argument is still
+ * a valid one, so no existing caller had to change.
  */
 export async function fetchStream<T>(
   url: string,
-  onProgress: (message: string) => void,
+  onProgress: (message: string, pct?: number) => void,
   signal: AbortSignal,
   onLocation?: (name: string) => void,
   onStep?: (step: StreamStep) => void
@@ -45,7 +51,7 @@ export async function fetchStream<T>(
       try {
         const msg = JSON.parse(line);
         if (msg.type === "progress") {
-          onProgress(msg.message);
+          onProgress(msg.message, typeof msg.pct === "number" ? msg.pct : undefined);
         } else if (msg.type === "location") {
           onLocation?.(msg.name);
         } else if (msg.type === "step") {

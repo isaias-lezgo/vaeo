@@ -23,6 +23,17 @@ interface ActivityPayload {
 export type ActivityStatus = "loading" | "ready" | "error";
 
 /**
+ * Lo que la tarjeta necesita para pintar una barra determinada mientras la
+ * ruta trabaja. `pct` es 0–1 y puede faltar (un frame de texto suelto), en cuyo
+ * caso quien pinte debe conservar el último valor conocido en vez de volver a
+ * cero.
+ */
+export interface ActivityProgress {
+  message: string;
+  pct: number;
+}
+
+/**
  * Carga /api/conversation-activity al montar, independiente del sync principal,
  * igual que useConversationsData: el panel pinta primero y la actividad entra
  * después.
@@ -30,6 +41,10 @@ export type ActivityStatus = "loading" | "ready" | "error";
 export function useConversationActivity() {
   const [activity, setActivity] = useState<Map<string, string | null>>(new Map());
   const [status, setStatus] = useState<ActivityStatus>("loading");
+  const [progress, setProgress] = useState<ActivityProgress>({
+    message: "Cargando actividad de conversaciones…",
+    pct: 0,
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
@@ -38,11 +53,15 @@ export function useConversationActivity() {
     abortRef.current = ctrl;
 
     setStatus("loading");
+    setProgress({ message: "Cargando actividad de conversaciones…", pct: 0 });
 
     try {
       const result = await fetchStream<ActivityPayload>(
         "/api/conversation-activity",
-        () => {},
+        (message, pct) =>
+          // Un frame sin `pct` NO es 0%: conserva el último avance conocido.
+          // Mandar la barra al inicio a media carga es peor que no tenerla.
+          setProgress((prev) => ({ message, pct: pct ?? prev.pct })),
         ctrl.signal
       );
       setActivity(new Map(result.activity.map((a) => [a.contactId, a.lastOutboundAt])));
@@ -66,5 +85,5 @@ export function useConversationActivity() {
     load();
   }, [load]);
 
-  return { activity, status, refresh };
+  return { activity, status, progress, refresh };
 }

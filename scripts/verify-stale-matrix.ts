@@ -15,6 +15,7 @@ import {
   bucketOfDays,
   buildStaleMatrix,
   daysSince,
+  CRITICAL_FROM_INDEX,
   isLiveStage,
   STALE_BUCKETS,
   type StaleBucketKey,
@@ -181,7 +182,10 @@ async function main() {
     const sumCols = STALE_BUCKETS.reduce((a, b) => a + m.colTotals[b.key].count, 0);
     assert.equal(sumCols, m.grandTotal, "los totales de columna cuadran");
 
-    // Las tres críticas: ≥31 días de movimiento y sin mensaje (⇒ 60+).
+    // Las tres críticas: sin mover 31+ días y sin mensaje (⇒ 60+).
+    // `y2` es la contraprueba del umbral: lleva 20 días sin mover (cubeta
+    // 16-30, ya dentro del eje crítico) pero se le escribió hace 9 (cubeta
+    // 8-15), y hacen falta las DOS.
     assert.equal(m.criticalCount, 3);
     assert.deepEqual([...m.criticalOppIds].sort(), criticas.map((o) => o.id).sort());
     assert.equal(m.cellMax, 2, "el máximo de celda es (31-60 × 60+)");
@@ -189,6 +193,30 @@ async function main() {
     // Se dibujan las cinco filas aunque estén vacías: un renglón faltante haría
     // que el ojo lea la matriz corrida.
     assert.equal(m.rows.length, STALE_BUCKETS.length);
+  }
+
+  // 6b. El umbral crítico vive en CRITICAL_FROM_INDEX, y bajarlo una cubeta
+  // (se movió de 31 a 16 días) no puede tocar NINGÚN conteo: es un umbral de
+  // lectura, no de agregación. Se ancla contra la constante y no contra un 2
+  // escrito a mano, para que el día que vuelva a moverse esto siga midiendo la
+  // regla y no una copia vieja de ella.
+  {
+    const limite = STALE_BUCKETS[CRITICAL_FROM_INDEX].min; // hoy 16
+    const dentro = opp({ contactId: "k1", movedDaysAgo: limite });
+    const justoAfuera = opp({ contactId: "k2", movedDaysAgo: limite - 1 });
+    const map = new Map<string, string | null>([
+      ["k1", daysAgo(limite)],
+      ["k2", daysAgo(limite)],
+    ]);
+    const m = buildStaleMatrix([dentro, justoAfuera], map, NOW);
+
+    assert.equal(m.grandTotal, 2, "el umbral no cambia el universo");
+    assert.deepEqual(m.criticalOppIds, [dentro.id]);
+    assert.equal(
+      m.criticalCount,
+      1,
+      "una cubeta antes del umbral en CUALQUIER eje deja de ser crítica"
+    );
   }
 
   // 7. Conjunto vacío.

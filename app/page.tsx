@@ -151,6 +151,7 @@ export default function DashboardPage() {
   const {
     activity: conversationActivity,
     status: activityStatus,
+    progress: activityProgress,
     refresh: refreshActivity,
   } = useConversationActivity()
 
@@ -572,6 +573,7 @@ export default function DashboardPage() {
             unfilteredOpportunities={data?.opportunities ?? []}
             conversationActivity={conversationActivity}
             activityStatus={activityStatus}
+            activityProgress={activityProgress}
             onRetryActivity={refreshActivity}
             calls={calls}
             messages={filteredMessages}
@@ -599,6 +601,7 @@ export default function DashboardPage() {
             unfilteredOpportunities={data?.opportunities ?? []}
             conversationActivity={conversationActivity}
             activityStatus={activityStatus}
+            activityProgress={activityProgress}
             onRetryActivity={refreshActivity}
             calls={calls}
             messages={filteredMessages}

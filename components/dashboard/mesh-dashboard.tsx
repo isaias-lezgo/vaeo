@@ -11,7 +11,10 @@ import type {
   Message,
 } from "@/lib/types"
 import type { ResolvedDateRange } from "@/lib/date-range"
-import type { ActivityStatus } from "@/hooks/use-conversation-activity"
+import type {
+  ActivityProgress,
+  ActivityStatus,
+} from "@/hooks/use-conversation-activity"
 import { DashboardShell } from "./dashboard-ui"
 import { SalesPivotTable } from "./sales-pivot-table"
 import { SalesByDimensionChart } from "./sales-by-dimension-chart"
@@ -62,6 +65,7 @@ export interface MeshDashboardProps {
   conversationActivity?: Map<string, string | null>
   /** El mapa vacío NO significa "nadie escribió": hasta "ready" no se pinta la matriz. */
   activityStatus?: ActivityStatus
+  activityProgress?: ActivityProgress
   onRetryActivity?: () => void
   calls?: Call[]
   messages?: Message[]
@@ -96,6 +100,7 @@ export function MeshDashboard({
   unfilteredOpportunities = [],
   conversationActivity,
   activityStatus = "loading",
+  activityProgress,
   onRetryActivity,
   calls = [],
   allPautas = [],
@@ -156,6 +161,7 @@ export function MeshDashboard({
         {...shared}
         conversationActivity={conversationActivity}
         activityStatus={activityStatus}
+        activityProgress={activityProgress}
         onRetryActivity={onRetryActivity}
       />
       <TaskBacklogChart

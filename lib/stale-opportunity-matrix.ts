@@ -40,10 +40,16 @@ export const STALE_BUCKETS: readonly StaleBucketDef[] = [
 ] as const
 
 /**
- * Desde qué índice de cubeta empieza el cuadrante crítico: ≥31 días en AMBOS
- * ejes, o sea sin mover y sin escribir por más de un mes.
+ * Desde qué índice de cubeta empieza el cuadrante crítico: ≥16 días en AMBOS
+ * ejes, o sea sin mover y sin escribir por más de dos semanas.
+ *
+ * Empezaba en la cubeta de 31 días. Se bajó una cubeta a pedido del cliente:
+ * en un ciclo de venta de membresías, quince días de silencio ya es un lead
+ * frío, y esperar al mes deja la alarma sonando cuando el lead ya se fue.
+ * El umbral es de LECTURA, no de agregación — mover esta constante no cambia
+ * ni una cuenta de celda, solo qué se tiñe y qué entra en `criticalCount`.
  */
-export const CRITICAL_FROM_INDEX = 3
+export const CRITICAL_FROM_INDEX = 2
 
 const DEEPEST: StaleBucketKey = "60+"
 
