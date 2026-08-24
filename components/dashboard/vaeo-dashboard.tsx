@@ -15,10 +15,12 @@ import type { ActivityStatus } from "@/hooks/use-conversation-activity"
 import { DashboardShell } from "./dashboard-ui"
 import { SalesPivotTable } from "./sales-pivot-table"
 import { SalesByDimensionChart } from "./sales-by-dimension-chart"
+import { LostByDimensionChart } from "./lost-by-dimension-chart"
 import { OpportunityStatusChart } from "./opportunity-status-chart"
 import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
 import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
 import { AdvisorStageTable } from "./advisor-stage-table"
+import { AssignmentFunnelChart } from "./assignment-funnel-chart"
 import { StaleOpportunityMatrix } from "./stale-opportunity-matrix"
 import { TaskBacklogChart } from "./task-backlog-chart"
 import { LostReasonMatrix } from "./lost-reason-matrix"
@@ -142,8 +144,14 @@ export function VaeoDashboard({
         <SalesByDimensionChart {...shared} dimension="sucursal" dateRange={dateRange} />
         <SalesByDimensionChart {...shared} dimension="servicio" dateRange={dateRange} />
       </div>
+      {/* El espejo de la de al lado: el mismo apilado por servicio, pero sobre
+          los leads que NO se ganaron y sobre el mes en que nos buscaron. El eje
+          tiene que ser el de creación —una perdida nunca tiene Fecha de Cierre—
+          y hoy su segmento gris domina, que es justo lo que la tarjeta reporta. */}
+      <LostByDimensionChart {...shared} dimension="servicio" />
       <OpportunityStatusChart {...shared} />
       <OpportunityWinRateChart {...shared} />
+      <AssignmentFunnelChart {...shared} />
       <AdvisorStageTable {...shared} />
       <StaleOpportunityMatrix
         {...shared}

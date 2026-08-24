@@ -21,6 +21,7 @@ import {
   TOTAL_KEY,
 } from "../lib/sales-pivot";
 import { buildSalesSeries, OTROS_KEY } from "../lib/sales-series";
+import { monthKeyOf as createdMonthKeyOf, statusBucket } from "../lib/opportunity-breakdown";
 import { PANEL_SCOPES, resolvePipelineId, scopeOpportunities } from "../lib/panel-scope";
 import { applyHubspotFilter, hasHubspotId, isHubspotImport } from "../lib/hubspot-import";
 
@@ -37,6 +38,7 @@ function opp(o: {
   status?: Opportunity["status"];
   stage?: string;
   pipelineId?: string;
+  creado?: string;
 }): Opportunity {
   const resolved: Record<string, string> = {};
   if (o.cierre) resolved["Fecha de Cierre"] = o.cierre;
@@ -49,7 +51,7 @@ function opp(o: {
     pipelineId: o.pipelineId ?? PANEL_SCOPES.vaeo.pipelineId,
     pipelineStageId: "stage-1",
     status: o.status ?? "won",
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: o.creado ?? "2026-01-01T00:00:00.000Z",
     contactId: `c${seq}`,
     value: o.value,
     stage: o.stage ?? "Ganado",
@@ -412,6 +414,144 @@ function main() {
       ["A", "B", "C", "D", "E", "F"],
       "con una sola sobrante se queda con su nombre"
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // buildSalesSeries generalizado: include / monthOf / measure
+  //
+  // Las tres opciones existen para que "Leads no ganados por servicio" reuse
+  // este agregado en vez de copiarle el orden de series y el plegado de
+  // "Otros". Lo que hay que aseverar es que los DEFAULTS no se movieron —el
+  // pivote de ventas depende de ellos— y que las opciones recortan el universo
+  // que dicen recortar.
+  // ---------------------------------------------------------------------------
+
+  // 15. Los defaults siguen siendo ganadas × Fecha de Cierre × valor. Una
+  // perdida con valor no puede colarse al agregado de ventas.
+  {
+    const mixto = [
+      opp({ value: 100, cierre: "2026-04-02T00:00:00.000Z", servicio: "Coworking" }),
+      opp({
+        value: 999,
+        cierre: "2026-04-02T00:00:00.000Z",
+        servicio: "Coworking",
+        status: "lost",
+        stage: "Perdido",
+      }),
+    ];
+    const d = buildSalesSeries(mixto, {
+      dimensionField: "Servicio",
+      emptyLabel: NO_SERVICIO,
+    });
+    assert.equal(d.grandTotal, 100, "sin opciones solo cuentan las ganadas, y en dinero");
+  }
+
+  // 16. include + measure: "count" — el universo espejo, contado por cabezas.
+  // El valor monetario deja de importar: una perdida en $0 pesa igual que una
+  // en $99,000, que es justo lo que quiere decir "cuántos leads".
+  {
+    const noGanada = (servicio: string, value: number, creado: string) =>
+      opp({ value, servicio, creado, status: "lost", stage: "Perdido" });
+    const set = [
+      noGanada("Coworking", 0, "2026-04-10T15:00:00.000Z"),
+      noGanada("Coworking", 99000, "2026-04-11T15:00:00.000Z"),
+      opp({ value: 5000, cierre: "2026-04-02T00:00:00.000Z", servicio: "Coworking" }),
+    ];
+    const d = buildSalesSeries(set, {
+      dimensionField: "Servicio",
+      emptyLabel: NO_SERVICIO,
+      include: (o) => statusBucket(o) === "perdida",
+      monthOf: (o) => createdMonthKeyOf(o.createdAt),
+      measure: "count",
+    });
+    assert.equal(d.grandTotal, 2, "cuenta oportunidades, no pesos, y deja fuera la ganada");
+    assert.equal(d.series[0].total, 2, "las dos perdidas caen en la misma serie");
+  }
+
+  // 17. "No ganadas" incluye las abiertas. Ojo con la etapa: isWonOpp() decide
+  // por NOMBRE de etapa, así que una abierta parada en "Ganado" sí es una venta
+  // y no debe entrar aquí.
+  {
+    const set = [
+      opp({ value: 0, servicio: "Coworking", status: "open", stage: "Nuevo Lead" }),
+      opp({ value: 0, servicio: "Coworking", status: "lost", stage: "Perdido" }),
+      opp({ value: 0, servicio: "Coworking", status: "open", stage: "Ganado" }),
+    ];
+    const d = buildSalesSeries(set, {
+      dimensionField: "Servicio",
+      emptyLabel: NO_SERVICIO,
+      include: (o) => statusBucket(o) !== "ganada",
+      monthOf: (o) => createdMonthKeyOf(o.createdAt),
+      measure: "count",
+    });
+    assert.equal(d.grandTotal, 2, "abierta + perdida; la parada en Ganado es una venta");
+  }
+
+  // 18. monthOf manda sobre el bucket, y se lee EN HORA LOCAL. No se asevera un
+  // mes literal —el script corre en la zona que sea— sino que el bucket es
+  // exactamente el que da el lector de opportunity-breakdown, que es el mismo
+  // que usa "Oportunidades por estado". Si las dos gráficas leyeran el mes
+  // distinto, un lead creado el 1 a las 02:00Z aparecería en meses distintos en
+  // cada una.
+  {
+    const creado = "2026-08-01T02:00:00.000Z";
+    const d = buildSalesSeries(
+      [opp({ value: 0, servicio: "Coworking", creado, status: "lost", stage: "Perdido" })],
+      {
+        dimensionField: "Servicio",
+        emptyLabel: NO_SERVICIO,
+        include: (o) => statusBucket(o) === "perdida",
+        monthOf: (o) => createdMonthKeyOf(o.createdAt),
+        measure: "count",
+      }
+    );
+    assert.equal(
+      d.buckets[0].key,
+      createdMonthKeyOf(creado),
+      "el bucket es el mes local, el mismo que lee opportunity-breakdown"
+    );
+  }
+
+  // 19. monthOf que devuelve null cae en la cubeta sin fecha en vez de perderse.
+  {
+    const d = buildSalesSeries(
+      [opp({ value: 0, servicio: "Coworking", status: "lost", stage: "Perdido" })],
+      {
+        dimensionField: "Servicio",
+        emptyLabel: NO_SERVICIO,
+        include: () => true,
+        monthOf: () => null,
+        measure: "count",
+      }
+    );
+    assert.equal(d.buckets[0].key, NO_DATE_KEY, "sin mes legible va a la cubeta sin fecha");
+    assert.equal(d.grandTotal, 1, "y sigue contando");
+  }
+
+  // 20. La cubeta vacía se rotula con emptyLabel y va SIEMPRE al final de las
+  // series, aunque sea la mayor. Es el caso real de esta gráfica: "Servicio" no
+  // se captura en los leads que se pierden, así que "Sin servicio" domina y
+  // aun así no puede robarle el primer lugar del apilado a un servicio real.
+  {
+    const perdida = (servicio?: string) =>
+      opp({ value: 0, servicio, status: "lost", stage: "Perdido" });
+    const d = buildSalesSeries(
+      [perdida(), perdida(), perdida(), perdida("Coworking")],
+      {
+        dimensionField: "Servicio",
+        emptyLabel: NO_SERVICIO,
+        include: (o) => statusBucket(o) === "perdida",
+        monthOf: (o) => createdMonthKeyOf(o.createdAt),
+        measure: "count",
+      }
+    );
+    assert.deepEqual(
+      d.series.map((s) => s.key),
+      ["Coworking", NO_SERVICIO],
+      "la cubeta vacía va al final aunque pese 3 contra 1"
+    );
+    assert.equal(d.series[1].kind, "empty", "y queda marcada como cubeta vacía");
+    assert.equal(d.series[1].total, 3);
   }
 
   console.log("verify-sales-pivot: all assertions passed");

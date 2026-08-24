@@ -56,7 +56,13 @@ const MONTHS_ES = [
   "jul", "ago", "sep", "oct", "nov", "dic",
 ]
 
-function monthKeyOf(iso: string | undefined): string | null {
+// Los tres helpers de mes se exportan —no son detalle interno— porque otros
+// charts arman su propio eje mensual y tienen que rellenar los meses vacíos
+// EXACTAMENTE igual: hoy lib/assignment-funnel.ts y lost-by-dimension-chart.tsx,
+// este último para que una perdida caiga en el mismo mes en que "Oportunidades
+// por estado" pone ese lead. Dos copias del relleno se desincronizan a la primera
+// corrección y nadie lo nota: los charts simplemente dejan de compartir el eje.
+export function monthKeyOf(iso: string | undefined): string | null {
   if (!iso) return null
   const d = new Date(iso)
   const t = d.getTime()
@@ -64,7 +70,7 @@ function monthKeyOf(iso: string | undefined): string | null {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
 }
 
-function monthLabelOf(key: string): string {
+export function monthLabelOf(key: string): string {
   const [year, month] = key.split("-")
   return `${MONTHS_ES[Number(month) - 1]} ${year}`
 }
@@ -82,7 +88,7 @@ function emptyRow(key: string, label: string): StatusMonthRow {
 }
 
 /** Todos los `YYYY-MM` de `from` a `to` inclusive, en orden. */
-function monthsBetween(from: string, to: string): string[] {
+export function monthsBetween(from: string, to: string): string[] {
   const [fy, fm] = from.split("-").map(Number)
   const [ty, tm] = to.split("-").map(Number)
   const out: string[] = []

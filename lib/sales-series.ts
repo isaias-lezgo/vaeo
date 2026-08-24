@@ -67,6 +67,35 @@ export interface SalesSeriesOptions {
    * grande — y el chart repintaría las series al mover el filtro.
    */
   namedKeys?: string[]
+  /**
+   * Qué oportunidades entran al agregado. Default: las ganadas.
+   *
+   * Existe para que "Leads no ganados por servicio" reuse este agregado en vez
+   * de copiar el orden de series y el plegado de "Otros" — dos copias de esa
+   * lógica se desincronizan a la primera corrección y las dos gráficas dejan de
+   * apilar los mismos valores sin que nadie lo note.
+   */
+  include?: (opp: Opportunity) => boolean
+  /**
+   * Mes al que pertenece la oportunidad (`YYYY-MM`), o null si no trae fecha
+   * legible — esas caen en la cubeta NO_DATE_KEY. Default: el mes de su Fecha
+   * de Cierre.
+   *
+   * La fecha y la forma de leerle el mes van JUNTAS en una sola opción a
+   * propósito. `Fecha de Cierre` es un campo DATE de GHL, que llega a medianoche
+   * UTC y por lo tanto tiene que leerse en UTC; `createdAt` es un timestamp real
+   * y tiene que leerse en hora local, o un lead creado el 1 a las 02:00Z se iría
+   * al mes anterior. Separarlas en dos opciones dejaría combinar la fecha de una
+   * con el lector de la otra, que es un error silencioso: la gráfica no truena,
+   * solo pone unos cuantos leads en el mes equivocado.
+   */
+  monthOf?: (opp: Opportunity) => string | null
+  /**
+   * Qué se acumula en cada celda: el valor monetario de la oportunidad
+   * ("value", default) o el número de oportunidades ("count"). También decide
+   * el orden de las series y qué se pliega en "Otros".
+   */
+  measure?: "value" | "count"
 }
 
 function cfString(v: string | string[] | undefined): string {
@@ -86,12 +115,20 @@ export function buildSalesSeries(
   const dimTotals = new Map<string, number>()
   const bucketKeys = new Set<string>()
 
+  const include = opts.include ?? isWonOpp
+  const monthOf =
+    opts.monthOf ??
+    ((o: Opportunity) => {
+      const iso = closeDateOf(o)
+      return iso ? monthKeyOf(iso) : null
+    })
+  const countOnly = opts.measure === "count"
+
   for (const o of opps) {
-    if (!isWonOpp(o)) continue
-    const iso = closeDateOf(o)
-    const bucketKey = iso ? monthKeyOf(iso) : NO_DATE_KEY
+    if (!include(o)) continue
+    const bucketKey = monthOf(o) ?? NO_DATE_KEY
     const dim = cfString(o.customFieldsResolved?.[opts.dimensionField]) || opts.emptyLabel
-    const value = o.value ?? 0
+    const value = countOnly ? 1 : o.value ?? 0
 
     entries.push({ bucketKey, dim, value, id: o.id })
     bucketKeys.add(bucketKey)
