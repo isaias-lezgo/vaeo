@@ -24,6 +24,7 @@ import { buildSalesSeries, OTROS_KEY } from "../lib/sales-series";
 import { monthKeyOf as createdMonthKeyOf, statusBucket } from "../lib/opportunity-breakdown";
 import { PANEL_SCOPES, resolvePipelineId, scopeOpportunities } from "../lib/panel-scope";
 import { applyHubspotFilter, hasHubspotId, isHubspotImport } from "../lib/hubspot-import";
+import { filterByCalendarDate, resolveDateRange } from "../lib/date-range";
 
 const SUCURSAL_FIELD = PANEL_SCOPES.vaeo.sucursalField; // "Sucursal VAEO"
 
@@ -552,6 +553,33 @@ function main() {
     );
     assert.equal(d.series[1].kind, "empty", "y queda marcada como cubeta vacía");
     assert.equal(d.series[1].total, 3);
+  }
+
+  // Fecha de Cierre en el PRIMER y ÚLTIMO día del rango. GHL la guarda a
+  // medianoche UTC; comparada contra la medianoche local del picker, la del
+  // primer día quedaba fuera (caso real: 1 sep, $11,988, VAEO, 2026-10-07).
+  {
+    const range = resolveDateRange({
+      preset: "custom",
+      from: new Date(2026, 8, 1),
+      to: new Date(2026, 9, 7),
+    });
+    const dated = (iso: string) => ({ iso });
+    const kept = filterByCalendarDate(
+      [
+        dated("2026-08-31T00:00:00.000Z"),
+        dated("2026-09-01T00:00:00.000Z"),
+        dated("2026-10-07T00:00:00.000Z"),
+        dated("2026-10-08T00:00:00.000Z"),
+      ],
+      (x) => x.iso,
+      range
+    ).map((x) => x.iso.slice(0, 10));
+    assert.deepEqual(
+      kept,
+      ["2026-09-01", "2026-10-07"],
+      "los días extremos del rango entran; el anterior y el siguiente no"
+    );
   }
 
   console.log("verify-sales-pivot: all assertions passed");

@@ -20,7 +20,7 @@ import {
   type PivotCell,
 } from "@/lib/sales-pivot"
 import { PANEL_SCOPES, scopeOpportunities, type PanelId } from "@/lib/panel-scope"
-import { filterByDateRange, type ResolvedDateRange } from "@/lib/date-range"
+import { filterByCalendarDate, type ResolvedDateRange } from "@/lib/date-range"
 import { cn } from "@/lib/utils"
 import {
   ChartCardContent,
@@ -74,11 +74,11 @@ export function SalesPivotTable({
 
   // Deliberately built off allOpportunities, not the date-filtered prop: the
   // rest of the panel filters by createdAt, and this table measures the close
-  // date. filterByDateRange keeps records with no date, which is what puts the
+  // date. filterByCalendarDate keeps records with no date, which is what puts the
   // "Sin fecha de cierre" row on screen under any filter.
   const pivot = useMemo(() => {
     const scoped = scopeOpportunities(allOpportunities, panel, pipelines)
-    const inRange = filterByDateRange(scoped, closeDateOf, dateRange)
+    const inRange = filterByCalendarDate(scoped, closeDateOf, dateRange)
     return buildSalesPivot(inRange, { sucursalField: scope.sucursalField })
   }, [allOpportunities, panel, pipelines, dateRange, scope.sucursalField])
 

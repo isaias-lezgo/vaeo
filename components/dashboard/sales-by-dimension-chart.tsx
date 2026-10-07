@@ -29,7 +29,7 @@ import {
   SERVICIO_FIELD,
 } from "@/lib/sales-pivot"
 import { PANEL_SCOPES, scopeOpportunities, type PanelId } from "@/lib/panel-scope"
-import { filterByDateRange, type ResolvedDateRange } from "@/lib/date-range"
+import { filterByCalendarDate, type ResolvedDateRange } from "@/lib/date-range"
 import { cn } from "@/lib/utils"
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart"
 import {
@@ -161,7 +161,7 @@ export function SalesByDimensionChart({
 
   const data = useMemo(
     () =>
-      buildSalesSeries(filterByDateRange(scoped, closeDateOf, dateRange), {
+      buildSalesSeries(filterByCalendarDate(scoped, closeDateOf, dateRange), {
         ...seriesOpts,
         namedKeys,
       }),

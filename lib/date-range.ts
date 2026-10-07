@@ -60,3 +60,31 @@ export function filterByDateRange<T>(
     return t >= fromMs && t <= toMs
   })
 }
+
+// For GHL DATE custom fields ("Fecha de Cierre"), which arrive as UTC midnight
+// of the calendar day the user picked. filterByDateRange would compare that
+// instant against LOCAL midnight — in Mexico City, 1 sep 00:00Z is still
+// 31 ago — and silently drop every record dated on the range's first day.
+// Here both sides are reduced to a calendar day: the field's in UTC, the
+// range's in local time (that is how the picker built it). Same keep-undated
+// rule as filterByDateRange.
+export function filterByCalendarDate<T>(
+  items: T[],
+  getDate: (item: T) => string | undefined,
+  range: ResolvedDateRange | null
+): T[] {
+  if (!range) return items
+
+  const localDay = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
+  const fromDay = localDay(range.from)
+  const toDay = localDay(range.to)
+
+  return items.filter((item) => {
+    const iso = getDate(item)
+    if (!iso) return true
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return true
+    const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    return day >= fromDay && day <= toDay
+  })
+}
