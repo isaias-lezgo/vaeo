@@ -21,7 +21,6 @@ import { SalesByDimensionChart } from "./sales-by-dimension-chart"
 import { LostByDimensionChart } from "./lost-by-dimension-chart"
 import { OpportunityStatusChart } from "./opportunity-status-chart"
 import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
-import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
 import { CanalDeContactoTrendChart, OrigenDeLeadTrendChart } from "./category-trend-chart"
 import { AdvisorStageTable } from "./advisor-stage-table"
 import { StaleOpportunityMatrix } from "./stale-opportunity-matrix"
@@ -169,12 +168,7 @@ export function VaeoDashboard({
         allTasks={allTasks}
         unfilteredOpportunities={unfilteredOpportunities}
       />
-      <div className="grid gap-5 lg:grid-cols-2">
-        <OrigenDeLeadChart {...shared} />
-        <CanalDeContactoChart {...shared} />
-      </div>
-      {/* Las mismas dos categorías, en el tiempo: cuántos leads llegaron por cada
-          origen y canal mes a mes. */}
+      {/* Cuántos leads llegaron por cada origen y canal, mes a mes. */}
       <div className="grid gap-5 lg:grid-cols-2">
         <OrigenDeLeadTrendChart {...shared} />
         <CanalDeContactoTrendChart {...shared} />
