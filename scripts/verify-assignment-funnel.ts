@@ -1,4 +1,4 @@
-// Verificación de lib/assignment-funnel.ts — "Leads sin asesor por mes".
+// Verificación de lib/assignment-funnel.ts — modo "Sin asesor" de "Oportunidades por estado".
 // Correr: pnpm verify:assignment
 //
 // Lo que justifica el script es que esta tarjeta tiene DOS poblaciones en juego:

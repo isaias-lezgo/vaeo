@@ -55,7 +55,15 @@ export interface SalesSeriesData {
 
 export interface SalesSeriesOptions {
   /** Custom field que apila: "Sucursal VAEO" | "Sucursal MESH" | "Servicio". */
-  dimensionField: string
+  dimensionField?: string
+  /**
+   * Alternativa a `dimensionField` para dimensiones que no son un custom field
+   * crudo: devuelve los valores YA normalizados de la oportunidad. Lista vacía =
+   * cubeta vacía. Con más de un valor la oportunidad cuenta en cada serie que
+   * nombra — así se comportan "Origen de Lead" y "Canal de Contacto", cuya
+   * normalización vive en opportunity-breakdown y no se duplica aquí.
+   */
+  dimensionsOf?: (opp: Opportunity) => string[]
   /** Etiqueta de la cubeta vacía: NO_SUCURSAL o NO_SERVICIO. */
   emptyLabel: string
   maxNamed?: number
@@ -127,12 +135,16 @@ export function buildSalesSeries(
   for (const o of opps) {
     if (!include(o)) continue
     const bucketKey = monthOf(o) ?? NO_DATE_KEY
-    const dim = cfString(o.customFieldsResolved?.[opts.dimensionField]) || opts.emptyLabel
+    const dims = opts.dimensionsOf
+      ? opts.dimensionsOf(o)
+      : [cfString(o.customFieldsResolved?.[opts.dimensionField ?? ""])].filter(Boolean)
     const value = countOnly ? 1 : o.value ?? 0
 
-    entries.push({ bucketKey, dim, value, id: o.id })
     bucketKeys.add(bucketKey)
-    dimTotals.set(dim, (dimTotals.get(dim) ?? 0) + value)
+    for (const dim of dims.length > 0 ? dims : [opts.emptyLabel]) {
+      entries.push({ bucketKey, dim, value, id: o.id })
+      dimTotals.set(dim, (dimTotals.get(dim) ?? 0) + value)
+    }
   }
 
   // Orden de series: total desc, empates por nombre, cubeta vacía siempre al

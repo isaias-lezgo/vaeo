@@ -1,4 +1,4 @@
-// Agregación detrás de "Leads sin asesor por mes".
+// Agregación detrás del modo "Sin asesor" de "Oportunidades por estado".
 //
 // El universo de esta tarjeta son EXCLUSIVAMENTE las oportunidades que nadie
 // tiene asignadas. Las que sí tienen asesor no aparecen ni como segmento ni como

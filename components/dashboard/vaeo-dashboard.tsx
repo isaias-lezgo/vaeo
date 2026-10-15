@@ -22,8 +22,8 @@ import { LostByDimensionChart } from "./lost-by-dimension-chart"
 import { OpportunityStatusChart } from "./opportunity-status-chart"
 import { OpportunityWinRateChart } from "./opportunity-win-rate-chart"
 import { CanalDeContactoChart, OrigenDeLeadChart } from "./category-breakdown-chart"
+import { CanalDeContactoTrendChart, OrigenDeLeadTrendChart } from "./category-trend-chart"
 import { AdvisorStageTable } from "./advisor-stage-table"
-import { AssignmentFunnelChart } from "./assignment-funnel-chart"
 import { StaleOpportunityMatrix } from "./stale-opportunity-matrix"
 import { TaskBacklogChart } from "./task-backlog-chart"
 import { LostReasonMatrix } from "./lost-reason-matrix"
@@ -156,7 +156,6 @@ export function VaeoDashboard({
       <LostByDimensionChart {...shared} dimension="servicio" />
       <OpportunityStatusChart {...shared} />
       <OpportunityWinRateChart {...shared} />
-      <AssignmentFunnelChart {...shared} />
       <AdvisorStageTable {...shared} />
       <StaleOpportunityMatrix
         {...shared}
@@ -173,6 +172,12 @@ export function VaeoDashboard({
       <div className="grid gap-5 lg:grid-cols-2">
         <OrigenDeLeadChart {...shared} />
         <CanalDeContactoChart {...shared} />
+      </div>
+      {/* Las mismas dos categorías, en el tiempo: cuántos leads llegaron por cada
+          origen y canal mes a mes. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <OrigenDeLeadTrendChart {...shared} />
+        <CanalDeContactoTrendChart {...shared} />
       </div>
       <LostReasonMatrix {...shared} />
       {/* Las mismas perdidas, la otra pregunta: no por qué se cayeron sino qué
